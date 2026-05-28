@@ -124,9 +124,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ x86_64, aarch64, armv7l, i686 ]
         python_version: [ '3.10', '3.13t', '3.14t' ]
-        manylinux: [ 'manylinux2014', 'musllinux_1_1' ]
+        # NOTE: `build` must be a real matrix dimension (not `include:`) so it
+        # cross-multiplies with python_version. Each entry below gives 3 jobs
+        # (one per Python version), total 5*3=15 linux wheels.
+        build:
+          # x86_64 keeps the manylinux2014 floor (glibc 2.17). The official
+          # image has gcc 4.8 but we install a modern host-arch cmake +
+          # libclang via pip; BoringSSL's C++ build still works because
+          # x86_64 manylinux2014 ships devtoolset-10 (gcc 10).
+          - { target: x86_64,  manylinux: manylinux2014 }
+          - { target: x86_64,  manylinux: musllinux_1_1 }
+          # aarch64 must use manylinux_2_28 (glibc 2.28, gcc 7.5) because the
+          # cross-compile image for manylinux2014 is permanently pinned to
+          # gcc 4.8 which cannot compile current BoringSSL (needs C++17).
+          # Same policy as the cryptography project. Covers RHEL 8+,
+          # Debian 10+, Ubuntu 18.04+, every cloud distro since 2018.
+          - { target: aarch64, manylinux: manylinux_2_28 }
+          - { target: aarch64, manylinux: musllinux_1_1 }
+          # armv7l: no glibc wheel. The cross-image's gcc 4.8 cannot build
+          # current BoringSSL, and no manylinux_2_28-cross variant exists
+          # for armv7. musllinux still covers Alpine/postmarketOS users.
+          - { target: armv7l,  manylinux: musllinux_1_1 }
     steps:
       - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
       - uses: actions/setup-python@v6
@@ -135,130 +154,92 @@ jobs:
           allow-prereleases: true
 
       - name: Build wheels (x86_64)
-        if: matrix.target == 'x86_64'
+        if: matrix.build.target == 'x86_64'
         uses: PyO3/maturin-action@v1
         env:
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.build.target }}
           args: --release --out dist --interpreter ${{ matrix.python_version }}
           sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
+          manylinux: ${{ matrix.build.manylinux }}
           docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
           before-script-linux: |
-            # Manylinux containers are CentOS-7 / AlmaLinux based; both
-            # support `yum`. BoringSSL needs cmake, ninja, go, and clang.
-            (yum install -y cmake3 ninja-build golang clang || true)
-            (apt-get update && apt-get install -y cmake ninja-build golang-go clang) || true
-            # CentOS 7 ships cmake 2.8; alias cmake3 if present.
-            (command -v cmake3 && ln -sf "$(command -v cmake3)" /usr/local/bin/cmake) || true
+            # manylinux2014 ships cmake 3.17 and clang 3.4; BoringSSL needs
+            # cmake >= 3.22 and bindgen needs libclang >= 9. Both come from
+            # PyPI wheels that link against glibc 2.17, so they are
+            # manylinux2014-safe even when used only as host tools.
+            if [ -x /opt/python/cp310-cp310/bin/python ]; then
+              PY=/opt/python/cp310-cp310/bin/python
+              "$PY" -m pip install --quiet --upgrade cmake ninja libclang
+              ln -sf /opt/python/cp310-cp310/bin/cmake /usr/local/bin/cmake
+              ln -sf /opt/python/cp310-cp310/bin/ninja /usr/local/bin/ninja
+              LIBCLANG_DIR=$("$PY" -c 'import os, clang; print(os.path.join(os.path.dirname(clang.__file__), "native"))')
+              export LIBCLANG_PATH="$LIBCLANG_DIR"
+              echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> "$GITHUB_ENV" 2>/dev/null || true
+            fi
+            (apk add --no-cache go clang) || true
+            (yum install -y golang clang || true)
+            (apt-get update && apt-get install -y golang-go clang) || true
 
-      - name: Build wheels (aarch64 + manylinux2014)
-        if: matrix.target == 'aarch64' && matrix.manylinux == 'manylinux2014'
-        uses: PyO3/maturin-action@v1
-        env:
-          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8 -DAT_HWCAP2=26"
-          UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter ${{ matrix.python_version }}
-          sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
-          docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
-          before-script-linux: |
-            (yum install -y cmake3 ninja-build golang clang || true)
-            (apt-get update && apt-get install -y cmake ninja-build golang-go clang) || true
-            (command -v cmake3 && ln -sf "$(command -v cmake3)" /usr/local/bin/cmake) || true
-            export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
-
-      - name: Build wheels (aarch64 + musllinux_1_1)
-        if: matrix.target == 'aarch64' && matrix.manylinux == 'musllinux_1_1'
+      - name: Build wheels (aarch64 + manylinux_2_28)
+        if: matrix.build.target == 'aarch64' && matrix.build.manylinux == 'manylinux_2_28'
         uses: PyO3/maturin-action@v1
         env:
           CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.build.target }}
           args: --release --out dist --interpreter ${{ matrix.python_version }}
           sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
+          manylinux: ${{ matrix.build.manylinux }}
           docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
           before-script-linux: |
+            # ghcr.io/rust-cross/manylinux_2_28-cross:aarch64 is Ubuntu-based
+            # and ships gcc 7.5 (C++17 capable), cmake 3.22, and clang 14.
+            # Only Go is missing; BoringSSL needs it for code generation.
+            apt-get update && apt-get install -y golang-go
+            export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
+
+      - name: Build wheels (aarch64 + musllinux_1_1)
+        if: matrix.build.target == 'aarch64' && matrix.build.manylinux == 'musllinux_1_1'
+        uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
+          UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
+        with:
+          target: ${{ matrix.build.target }}
+          args: --release --out dist --interpreter ${{ matrix.python_version }}
+          sccache: 'true'
+          manylinux: ${{ matrix.build.manylinux }}
+          docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
+          before-script-linux: |
+            # musllinux ships cmake 3.27+ via apk; no pip override needed.
             (apk add --no-cache cmake ninja go clang) || true
             (yum install -y cmake3 ninja-build golang clang || true)
             (apt-get update && apt-get install -y cmake ninja-build golang-go clang) || true
-            (command -v cmake3 && ln -sf "$(command -v cmake3)" /usr/local/bin/cmake) || true
             export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/local/musl/bin/../aarch64-unknown-linux-musl/"
 
-      - name: Build wheels (armv7l + manylinux2014)
-        if: matrix.target == 'armv7l' && matrix.manylinux == 'manylinux2014'
-        uses: PyO3/maturin-action@v1
-        env:
-          UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter ${{ matrix.python_version }}
-          sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
-          docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
-          before-script-linux: |
-            (yum install -y cmake3 ninja-build golang clang || true)
-            (apt-get update && apt-get install -y cmake ninja-build golang-go clang) || true
-            (command -v cmake3 && ln -sf "$(command -v cmake3)" /usr/local/bin/cmake) || true
-
       - name: Build wheels (armv7l + musllinux_1_1)
-        if: matrix.target == 'armv7l' && matrix.manylinux == 'musllinux_1_1'
+        if: matrix.build.target == 'armv7l' && matrix.build.manylinux == 'musllinux_1_1'
         uses: PyO3/maturin-action@v1
         env:
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.build.target }}
           args: --release --out dist --interpreter ${{ matrix.python_version }}
           sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
+          manylinux: ${{ matrix.build.manylinux }}
           docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
           before-script-linux: |
             (apk add --no-cache cmake ninja go clang) || true
             (yum install -y cmake3 ninja-build golang clang || true)
             export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/local/musl/armv7-unknown-linux-musleabihf"
 
-      - name: Build wheels (i686 + manylinux2014)
-        if: matrix.target == 'i686' && matrix.manylinux == 'manylinux2014'
-        uses: PyO3/maturin-action@v1
-        env:
-          UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter ${{ matrix.python_version }}
-          sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
-          docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
-          container: messense/manylinux2014-cross:i686
-          before-script-linux: |
-            (yum install -y cmake3 ninja-build golang clang || true)
-            (apt-get update && apt-get install -y cmake ninja-build golang-go clang) || true
-            (command -v cmake3 && ln -sf "$(command -v cmake3)" /usr/local/bin/cmake) || true
-            export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/i686-unknown-linux-gnu/i686-unknown-linux-gnu/sysroot"
-
-      - name: Build wheels (i686 + musllinux_1_1)
-        if: matrix.target == 'i686' && matrix.manylinux == 'musllinux_1_1'
-        uses: PyO3/maturin-action@v1
-        env:
-          UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --interpreter ${{ matrix.python_version }}
-          sccache: 'true'
-          manylinux: ${{ matrix.manylinux }}
-          docker-options: -e UNSAFE_PYO3_SKIP_VERSION_CHECK=1
-          before-script-linux: |
-            (apk add --no-cache cmake ninja go clang) || true
-            export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/local/musl/i686-unknown-linux-musl"
-
       - name: Upload wheels
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}-${{ matrix.python_version }}
+          name: wheels-linux-${{ matrix.build.target }}-${{ matrix.build.manylinux }}-${{ matrix.python_version }}
           path: dist/*.whl
 
   windows:
@@ -276,7 +257,10 @@ jobs:
       - uses: actions/setup-python@v6
         if: matrix.target != 'aarch64'
         with:
-          python-version: ${{ matrix.python_version }}
+          # setup-python@v6 does not parse the trailing `t` suffix; split
+          # the base version + freethreaded flag explicitly.
+          python-version: ${{ matrix.python_version == '3.13t' && '3.13' || matrix.python_version == '3.14t' && '3.14' || matrix.python_version }}
+          freethreaded: ${{ endsWith(matrix.python_version, 't') }}
           architecture: ${{ matrix.target == 'x86' && 'x86' || 'x64' }}
           allow-prereleases: true
       - uses: ilammy/setup-nasm@v1
@@ -322,7 +306,8 @@ jobs:
       - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python_version }}
+          python-version: ${{ matrix.python_version == '3.13t' && '3.13' || matrix.python_version == '3.14t' && '3.14' || matrix.python_version }}
+          freethreaded: ${{ endsWith(matrix.python_version, 't') }}
           allow-prereleases: true
       - name: install boringssl deps
         run: brew install cmake ninja go
@@ -330,6 +315,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
+          # BoringSSL uses C++17 std::optional::value() which is gated on
+          # macOS 10.13+ libc++. Force the deployment target to a modern
+          # baseline so the universal2 build covers both arches.
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --interpreter ${{ matrix.python_version }}
