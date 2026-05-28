@@ -1,0 +1,50 @@
+utls
+Copyright (c) 2026 Ahmed TAHRI
+
+This product is licensed under the MIT License. See LICENSE for the full text.
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+1. BoringSSL (statically linked at build time via boring-sys)
+   Source: https://boringssl.googlesource.com/boringssl/
+   License: OpenSSL License, ISC License, and MIT License (per-file; see
+            the boring-sys crate's vendored LICENSE for the canonical
+            breakdown).
+   Notice: BoringSSL is a fork of OpenSSL by Google. Original OpenSSL
+           copyright notices are preserved in the boring-sys vendor tree.
+           utls does not vendor BoringSSL itself and applies no patches;
+           it depends on the upstream `boring-sys` crate (~> 5).
+
+2. boring-sys (Rust crate)
+   Source: https://github.com/cloudflare/boring
+   License: Apache-2.0
+
+3. uTLS-derived specification data (extension order tables, GREASE layout
+   conventions, ALPS extension number assignments, etc.)
+   Source: https://github.com/refraction-networking/utls
+   License: BSD-3-Clause
+   Notice: Portions of the per-browser fingerprint profiles under
+           python/utls/profiles/ are informed by uTLS's public spec data.
+           Where directly derived, the relevant module includes a header
+           comment attributing the source.
+
+4. JA4 fingerprint algorithm
+   Source: https://github.com/FoxIO-LLC/ja4
+   License: BSD-3-Clause
+   Notice: utls implements the JA4 algorithm pinned to spec revision
+           0.18.8. See crates/utls-core/src/fingerprint/ja4.rs.
+
+5. JA3 fingerprint algorithm
+   Source: https://github.com/salesforce/ja3
+   License: BSD-3-Clause
+
+------------------------------------------------------------------------------
+Trademarks
+------------------------------------------------------------------------------
+
+"Chrome" is a trademark of Google LLC. Its use in profile names and
+documentation refers solely to the observable network behaviour of the
+Chrome browser and does not imply endorsement by, or affiliation with,
+Google LLC.

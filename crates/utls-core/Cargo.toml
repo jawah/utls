@@ -1,0 +1,23 @@
+[package]
+name         = "utls-core"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+description  = "Pure-Rust core for the utls Python library: SSLContext, MemoryBIO, and Fingerprint over BoringSSL."
+
+[lib]
+name = "utls_core"
+path = "src/lib.rs"
+
+[dependencies]
+boring-sys = { workspace = true }
+libc       = { workspace = true }
+thiserror  = { workspace = true }
+
+[features]
+default = []
+# When set, capture-and-replay tests are compiled in. Off by default to keep
+# the core's surface tight for the PyO3 layer.
+capture-tests = []

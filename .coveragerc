@@ -1,0 +1,24 @@
+[run]
+source =
+    utls
+# Needed for Python 3.11 and lower
+disable_warnings = no-sysmon
+
+[paths]
+source =
+    python/utls
+    */utls
+    *\utls
+
+[report]
+exclude_lines =
+    ^\s*except ModuleNotFoundError:\s*$
+    ^\s*except ImportError:\s*$
+    ^\s*pass\s*$
+    ^\s*raise NotImplementedError\b
+    .*#\s*Platform-specific.*
+    .*:.*#\s*Python \d.*
+    .*#\s*Abstract\b
+    .*#\s*Defensive:
+    ^\s*if (?:typing\.)?TYPE_CHECKING:\s*$
+    ^\s*\.\.\.\s*$

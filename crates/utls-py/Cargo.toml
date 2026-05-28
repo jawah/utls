@@ -1,0 +1,24 @@
+[package]
+name         = "utls-py"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+description  = "PyO3 bindings for utls-core, producing the `_utls` Python extension module."
+publish      = false
+build        = "build.rs"
+
+[lib]
+# Build a cdylib named `_utls.<platform-suffix>`. Maturin's `module-name` setting
+# in pyproject.toml controls where the file lands inside the wheel.
+name       = "_utls"
+crate-type = ["cdylib"]
+path       = "src/lib.rs"
+
+[dependencies]
+utls-core = { path = "../utls-core" }
+pyo3      = { workspace = true }
+
+[features]
+default = []
