@@ -1191,9 +1191,11 @@ impl Connection {
             // Verification errors get a dedicated variant so the Python layer
             // can raise SSLCertVerificationError.
             Error::Protocol { .. } => {
-                // SAFETY: ssl valid; SSL_get_verify_result is read-only.
+                // SAFETY: ssl valid; both calls are read-only.
+                let verify_mode = unsafe { boring_sys::SSL_get_verify_mode(self.ssl.as_ptr()) };
+                let verifies = (verify_mode as u32 & boring_sys::SSL_VERIFY_PEER as u32) != 0;
                 let verify = unsafe { boring_sys::SSL_get_verify_result(self.ssl.as_ptr()) };
-                if verify != 0
+                if verifies && verify != 0
                 /* X509_V_OK */
                 {
                     // SAFETY: ssl valid.

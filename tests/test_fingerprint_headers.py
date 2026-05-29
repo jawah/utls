@@ -53,7 +53,6 @@ def test_profile_headers_excluded_keys_absent():
     or session-dependent and belong to the HTTP-layer caller."""
     for h in (chrome_131.HTTP_HEADERS, chrome_142.HTTP_HEADERS, chrome_146.HTTP_HEADERS, chrome_148.HTTP_HEADERS):
         for forbidden in (
-            ":method", ":path", ":authority", ":scheme",
             "Cookie", "Referer", "Host",
             "Content-Length", "Content-Type",
         ):

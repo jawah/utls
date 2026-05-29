@@ -151,8 +151,8 @@ for name, value in fp.http_headers.items():
 ```
 
 Request- or session-dependent headers (`Host`, `Cookie`, `Referer`,
-`Content-Length`, `Content-Type`, plus H2 pseudo-headers) are deliberately
-omitted from the dict; the HTTP client is responsible for emitting those.
+`Content-Length`, `Content-Type`) are deliberately omitted from the dict;
+the HTTP client is responsible for emitting those.
 For HTTP/1.1, prepend `Host` at position 0 to preserve Chrome's wire order.
 
 #### Choosing a profile

@@ -7,7 +7,6 @@ from . import chrome_146 as _prev
 
 #: Per-request HTTP headers Chrome 148 stable sends on a top-level navigation
 #: from Linux, captured from a live incognito hit on tls.peet.ws.
-#: Insertion order is the on-the-wire order observed in the H2 HEADERS frame.
 HTTP_HEADERS: dict[str, str] = {
     "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
     "sec-ch-ua-mobile": "?0",

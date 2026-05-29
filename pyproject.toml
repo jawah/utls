@@ -54,6 +54,10 @@ manifest-path  = "crates/utls-py/Cargo.toml"
 python-source  = "python"
 module-name    = "utls._utls"
 features       = ["pyo3/extension-module"]
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "NOTICE",  format = "sdist" },
+]
 
 [tool.pytest.ini_options]
 minversion       = "7.0"
@@ -73,7 +77,6 @@ ignore = ["E501"]
 required-imports = ["from __future__ import annotations"]
 
 [tool.mypy]
-python_version              = "3.8"
 disallow_untyped_calls      = true
 disallow_untyped_decorators = true
 ignore_missing_imports      = true

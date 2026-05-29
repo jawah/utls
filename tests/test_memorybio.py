@@ -114,3 +114,67 @@ def test_adapted_bio_pumps_eof_into_rust_incoming():
     inc.write_eof()
     with pytest.raises((SSLError, SSLWantReadError, SSLEOFError)):
         obj.do_handshake()
+
+
+def _drive(client, server, c_in, c_out, s_in, s_out):
+    """Pump bytes both ways until both sides finish the handshake. Plain
+    memorybio shuffle - no socket involved."""
+    for _ in range(16):
+        for side in (client, server):
+            try:
+                side.do_handshake()
+            except (utls.SSLWantReadError, utls.SSLWantWriteError):
+                pass
+        d = c_out.read()
+        if d:
+            s_in.write(d)
+        d = s_out.read()
+        if d:
+            c_in.write(d)
+
+
+def _connected_pair(ca, cert):
+    sctx = utls.SSLContext(utls.PROTOCOL_TLS_SERVER)
+    cert.configure_cert(sctx)
+    cctx = utls.create_default_context()
+    ca.configure_trust(cctx)
+    c_in, c_out = utls.MemoryBIO(), utls.MemoryBIO()
+    s_in, s_out = utls.MemoryBIO(), utls.MemoryBIO()
+    cobj = cctx.wrap_bio(c_in, c_out, server_hostname="localhost")
+    sobj = sctx.wrap_bio(s_in, s_out, server_side=True)
+    _drive(cobj, sobj, c_in, c_out, s_in, s_out)
+    return cobj, sobj, c_in, c_out, s_in, s_out
+
+
+def test_sslobject_read_into_bytearray(ca):
+    cert = ca.issue_cert("localhost")
+    cobj, sobj, c_in, c_out, s_in, s_out = _connected_pair(ca, cert)
+    sobj.write(b"hello world")
+    d = s_out.read()
+    if d:
+        c_in.write(d)
+    buf = bytearray(64)
+    n = cobj.read(64, buf)
+    assert n == len(b"hello world")
+    assert bytes(buf[:n]) == b"hello world"
+
+
+def test_sslobject_read_into_memoryview(ca):
+    cert = ca.issue_cert("localhost")
+    cobj, sobj, c_in, c_out, s_in, s_out = _connected_pair(ca, cert)
+    sobj.write(b"abcd")
+    d = s_out.read()
+    if d:
+        c_in.write(d)
+    backing = bytearray(8)
+    n = cobj.read(8, memoryview(backing))
+    assert n == 4
+    assert bytes(backing[:4]) == b"abcd"
+
+
+def test_sslobject_read_rejects_readonly_buffer(ca):
+    cert = ca.issue_cert("localhost")
+    cobj, sobj, _, _, _, s_out = _connected_pair(ca, cert)
+    sobj.write(b"x")
+    with pytest.raises(TypeError):
+        cobj.read(1, b"immutable")  # bytes are read-only

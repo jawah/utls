@@ -15,18 +15,24 @@ if TYPE_CHECKING:
 
 from . import _utls as _core
 
-# Value matches ssl.PROTOCOL_TLS_CLIENT (CPython hardcoded 2).
-PROTOCOL_TLS_CLIENT: Final[int] = 2
-# Value matches ssl.PROTOCOL_TLS_SERVER (CPython hardcoded 3). utls supports
+# Value matches ssl.PROTOCOL_TLS_CLIENT
+PROTOCOL_TLS_CLIENT: Final[int] = 16
+# Value matches ssl.PROTOCOL_TLS_SERVER (CPython hard-codes 17). utls supports
 # server-side TLS for everything BoringSSL still exposes (mTLS, ALPN
 # selection, SNI dispatch, ECDH curve restriction, session ticket count,
 # session_id_context); features BoringSSL deleted (compression, SSLv2/v3)
 # are explicitly rejected.
-PROTOCOL_TLS_SERVER: Final[int] = 3
-# stdlib alias: ``PROTOCOL_TLS`` is the deprecated catch-all that defaults to
-# client-side TLS when used to construct an SSLContext. Some third-party code
-# still references it.
-PROTOCOL_TLS: Final[int] = PROTOCOL_TLS_CLIENT
+PROTOCOL_TLS_SERVER: Final[int] = 17
+# stdlib alias: ``PROTOCOL_TLS`` is the deprecated catch-all (value ``2``).
+# Constructing an SSLContext with it defaults to client-side TLS. Some
+# third-party code still references this; we accept it for parity.
+PROTOCOL_TLS: Final[int] = 2
+# Even older alias - identical to PROTOCOL_TLS by stdlib convention.
+PROTOCOL_SSLv23: Final[int] = PROTOCOL_TLS
+# Deprecated per-version selectors. Stdlib still exports them and tolerates them
+PROTOCOL_TLSv1: Final[int] = 3
+PROTOCOL_TLSv1_1: Final[int] = 4
+PROTOCOL_TLSv1_2: Final[int] = 5
 
 
 CERT_NONE: Final[int] = 0
@@ -35,12 +41,15 @@ CERT_REQUIRED: Final[int] = 2
 
 
 class TLSVersion(enum.IntEnum):
-    """Mirrors :class:`ssl.TLSVersion`. We only meaningfully support 1.2 and 1.3."""
+    """Mirrors :class:`ssl.TLSVersion`."""
 
-    MINIMUM_SUPPORTED = 0
-    TLSv1_2 = 2
-    TLSv1_3 = 3
-    MAXIMUM_SUPPORTED = 9
+    MINIMUM_SUPPORTED = -2
+    SSLv3 = 0x0300
+    TLSv1 = 0x0301
+    TLSv1_1 = 0x0302
+    TLSv1_2 = 0x0303
+    TLSv1_3 = 0x0304
+    MAXIMUM_SUPPORTED = -1
 
 
 class Purpose(enum.Enum):
@@ -50,18 +59,41 @@ class Purpose(enum.Enum):
     CLIENT_AUTH = 1
 
 
-OP_NO_SSLv2: Final[int] = 0x01000000
-OP_NO_SSLv3: Final[int] = 0x02000000
-OP_NO_TLSv1: Final[int] = 0x04000000
-OP_NO_TLSv1_1: Final[int] = 0x10000000
-OP_NO_TLSv1_2: Final[int] = 0x08000000
-OP_NO_TLSv1_3: Final[int] = 0x20000000
-OP_NO_COMPRESSION: Final[int] = 0x00020000  # honored: BoringSSL never compresses
-OP_NO_RENEGOTIATION: Final[int] = 0x40000000  # honored: BoringSSL refuses renegotiation client-side
-# Stored verbatim: BoringSSL controls session-ticket emission via
-# SSL_OP_NO_TICKET only on the server side; on a client the flag is a no-op.
-# Accepted for API parity with ``ssl.OP_NO_TICKET``.
-OP_NO_TICKET: Final[int] = 0x00004000
+class Options(enum.IntFlag):
+    """Mirrors :class:`ssl.Options`."""
+
+    OP_NO_SSLv2 = 0x01000000
+    OP_NO_SSLv3 = 0x02000000
+    OP_NO_TLSv1 = 0x04000000
+    OP_NO_TLSv1_1 = 0x10000000
+    OP_NO_TLSv1_2 = 0x08000000
+    OP_NO_TLSv1_3 = 0x20000000
+    # Honored: BoringSSL never compresses.
+    OP_NO_COMPRESSION = 0x00020000
+    # Honored: BoringSSL refuses client-side renegotiation unconditionally.
+    OP_NO_RENEGOTIATION = 0x40000000
+    # Stored verbatim: SSL_OP_NO_TICKET only affects the server side; on a
+    # client it's a no-op. Accepted for API parity with ``ssl.OP_NO_TICKET``.
+    OP_NO_TICKET = 0x00004000
+
+    def __contains__(self, other: object) -> bool:
+        # Permissive membership: any int with the right bits set counts.
+        # Without this, ``utls.OP_NO_TLSv1_3 in ctx.options`` would raise
+        # ``TypeError`` on Python 3.12+ if either operand were a plain int.
+        if isinstance(other, int):
+            return (int(self) & int(other)) == int(other)
+        return NotImplemented  # Defensive: mimic stdlib's fallback path.
+
+
+OP_NO_SSLv2: Final[Options] = Options.OP_NO_SSLv2
+OP_NO_SSLv3: Final[Options] = Options.OP_NO_SSLv3
+OP_NO_TLSv1: Final[Options] = Options.OP_NO_TLSv1
+OP_NO_TLSv1_1: Final[Options] = Options.OP_NO_TLSv1_1
+OP_NO_TLSv1_2: Final[Options] = Options.OP_NO_TLSv1_2
+OP_NO_TLSv1_3: Final[Options] = Options.OP_NO_TLSv1_3
+OP_NO_COMPRESSION: Final[Options] = Options.OP_NO_COMPRESSION
+OP_NO_RENEGOTIATION: Final[Options] = Options.OP_NO_RENEGOTIATION
+OP_NO_TICKET: Final[Options] = Options.OP_NO_TICKET
 
 HAS_TLSv1_3: Final[bool] = True
 HAS_ALPN: Final[bool] = True

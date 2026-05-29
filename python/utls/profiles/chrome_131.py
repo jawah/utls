@@ -14,8 +14,7 @@ from ._base import Ext, Group, SigAlg
 #: ``curl_cffi.requests.impersonate`` chrome131 entry.
 #:
 #: Excluded on purpose (request-/session-/body-dependent, caller-owned):
-#: HTTP/2 pseudo-headers (``:method`` / ``:path`` / ``:authority`` /
-#: ``:scheme``), ``Cookie``, ``Referer``, ``Host``, ``Content-*``. The
+#: ``Cookie``, ``Referer``, ``Host``, ``Content-*``. The
 #: ``sec-ch-ua`` brand list rotates per Chrome release; the value below
 #: matches a real Chrome 131 install but the third "Not?A_Brand" token is
 #: randomized in the field and may drift.
@@ -39,11 +38,8 @@ HTTP_HEADERS: dict[str, str] = {
     "Sec-Fetch-Dest": "document",
     "Accept-Encoding": "gzip, deflate, br, zstd",
     "Accept-Language": "en-US,en;q=0.9",
-    # RFC 9218 Extensible Priorities. Chrome 124+ negotiates
-    # SETTINGS_NO_RFC7540_PRIORITIES=1 and signals stream priority via this
-    # header instead of the legacy HEADERS-frame PRIORITY flag.
-    # ``u=0`` = urgency 0 (highest, used for top-level navigations);
-    # ``i`` = incremental (the response can be processed as it arrives).
+    # RFC 9218 Extensible Priorities. ``u=0`` = urgency 0 (highest, used
+    # for top-level navigations); ``i`` = incremental.
     "Priority": "u=0, i",
 }
 

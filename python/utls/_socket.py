@@ -6,7 +6,6 @@ from typing import Any
 from ._facade import MemoryBIO, SSLContext, SSLObject, SSLSession, _ErrorRemapping
 from .exceptions import (
     SSLEOFError,
-    SSLError,
     SSLWantReadError,
     SSLWantWriteError,
     SSLZeroReturnError,
@@ -36,6 +35,8 @@ class SSLSocket:
         self._context = context
         self._server_side = server_side
         self._suppress_ragged_eofs = suppress_ragged_eofs
+        self._io_refs = 0
+        self._closed = False
         self._incoming = MemoryBIO()
         self._outgoing = MemoryBIO()
         self._sslobj: SSLObject = context.wrap_bio(
@@ -68,10 +69,11 @@ class SSLSocket:
         # than many small ones - see the rtls-inspired batching note in
         # ``Connection::read`` (Rust side).
         want = max(hint, self._DEFAULT_PULL_SIZE)
-        try:
-            chunk = self._sock.recv(want)
-        except OSError as ex:
-            raise SSLError(f"socket recv failed: {ex}") from ex
+        # NB: stdlib ssl lets socket-level OSError (incl. socket.timeout /
+        # TimeoutError and BlockingIOError on non-blocking fds) propagate
+        # untouched. Wrapping them as SSLError breaks every HTTP client
+        # that catches TimeoutError separately for retry/backoff logic.
+        chunk = self._sock.recv(want)
         if not chunk:
             self._incoming.write_eof()
             return
@@ -250,10 +252,31 @@ class SSLSocket:
                 ) from None
 
     def close(self) -> None:
+        # Mirror stdlib's deferred-close semantics: an outstanding
+        # ``SocketIO`` returned by ``makefile()`` keeps the underlying
+        # socket alive until *its* close drops the refcount to zero.
+        # Without this, code like ``f = sock.makefile(); sock.close();
+        # f.read()`` would lose the underlying socket before the file
+        # object is done with it.
+        self._closed = True
+        if self._io_refs <= 0:
+            self._real_close()
+
+    def _real_close(self) -> None:
         try:
             self._sock.close()
         except OSError:  # Defensive: socket may already be in a broken state.
             pass
+
+    def _decref_socketios(self) -> None:
+        # Called by ``socket.SocketIO.close()`` to release the reference
+        # taken in ``makefile()``. Defined as a no-op on a raw socket if
+        # the counter is already at zero; only triggers the real close
+        # once the user has also called ``self.close()``.
+        if self._io_refs > 0:
+            self._io_refs -= 1
+        if self._closed:
+            self._real_close()
 
     def selected_alpn_protocol(self) -> str | None:
         return self._sslobj.selected_alpn_protocol()
@@ -340,6 +363,17 @@ class SSLSocket:
     def setsockopt(self, *args: Any, **kwargs: Any) -> Any:
         return self._sock.setsockopt(*args, **kwargs)
 
+    def shutdown(self, how: int) -> None:
+        """Pass-through to ``socket.socket.shutdown``. Stdlib's
+        :class:`ssl.SSLSocket` inherits this from :class:`socket.socket`;
+        urllib3-future's DoH/DoT resolver calls ``self._socket.shutdown(0)``
+        in its close path and crashed with ``AttributeError`` here until
+        we exposed the delegate. Note this is the *TCP* half-close
+        (``SHUT_RD`` / ``SHUT_WR`` / ``SHUT_RDWR``), not the TLS
+        ``close_notify`` exchange - the latter is :meth:`unwrap`.
+        """
+        self._sock.shutdown(how)
+
     def settimeout(self, t: float | None) -> None:
         self._sock.settimeout(t)
 
@@ -361,6 +395,11 @@ class SSLSocket:
     def makefile(
         self, mode: str = "r", *args: Any, **kwargs: Any
     ) -> Any:  # Defensive: thin delegate, exercised by stdlib http.client tests.
+        # Stdlib's ``socket.makefile()`` bumps ``_io_refs`` *before* it
+        # constructs the :class:`socket.SocketIO`, because ``SocketIO.close``
+        # always decrements via ``_decref_socketios``. Mirror that here so
+        # the ref accounting balances after ``f.close()``.
+        self._io_refs += 1
         return socket.SocketIO(self, mode)  # type: ignore[arg-type]
 
     # context-manager sugar

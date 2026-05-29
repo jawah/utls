@@ -14,6 +14,11 @@ from .constants import (
     PROTOCOL_TLS,
     PROTOCOL_TLS_CLIENT,
     PROTOCOL_TLS_SERVER,
+    Options,
+    PROTOCOL_SSLv23,
+    PROTOCOL_TLSv1,
+    PROTOCOL_TLSv1_1,
+    PROTOCOL_TLSv1_2,
     Purpose,
     TLSVersion,
 )
@@ -25,6 +30,24 @@ from .exceptions import (
     SSLWantWriteError,
     SSLZeroReturnError,
 )
+
+
+def _tls_version_to_rust_code(v: TLSVersion) -> int:
+    """Translate a stdlib-shaped ``TLSVersion`` to the small u8-fit code."""
+    iv = int(v)
+    if iv == int(TLSVersion.MINIMUM_SUPPORTED):
+        return 0
+    if iv == int(TLSVersion.MAXIMUM_SUPPORTED):
+        return 9
+    if iv >= int(TLSVersion.TLSv1_3):
+        return 3
+    if iv >= int(TLSVersion.TLSv1_2):
+        return 2
+    # SSLv3 / TLSv1 / TLSv1_1: stdlib accepts the assignment even when
+    # the underlying library refuses to negotiate them. We do the same:
+    # the value is stored as-is on the Python side, but the FFI sees
+    # the floor (TLS 1.2) because that's the lowest BoringSSL will go.
+    return 2
 
 
 def _translate_core_error(exc: BaseException) -> BaseException:
@@ -270,11 +293,42 @@ class SSLObject:
         finally:
             self._pump_out()
 
-    def read(self, n: int = 1024) -> bytes:
+    def read(self, n: int = 1024, buffer: Any = None) -> Any:
+        """Mirrors :meth:`ssl.SSLObject.read`.
+
+        When *buffer* is ``None`` (the default), returns up to *n* bytes
+        as a ``bytes`` object - stdlib behavior. When *buffer* is a
+        writable bytes-like object (``bytearray`` / ``memoryview`` /
+        ``ctypes`` array / ...), reads up to ``len(buffer)`` bytes into
+        it and returns the number of bytes read as an ``int``.
+
+        The buffer form is what :mod:`asyncio.sslproto` uses on Python
+        3.11+ (``self._sslobj.read(wants, buf)`` in its
+        ``_do_read__buffered`` path); without this overload that call
+        crashes with ``TypeError: SSLObject.read() takes from 1 to 2
+        positional arguments but 3 were given``.
+        """
         self._pump_in()
         try:
             with _ErrorRemapping():
-                return self._conn.read(n)
+                if buffer is None:
+                    return self._conn.read(n)
+                # Buffer form: stdlib ignores *n* and uses the buffer's
+                # length as the read cap. ``memoryview`` lets us write
+                # the bytes back without an extra Python-level copy.
+                mv = memoryview(buffer)
+                if mv.readonly:
+                    raise TypeError("read() buffer must be writable")
+                cap = len(mv) if mv.ndim == 1 else mv.nbytes
+                if cap == 0:
+                    return 0
+                data = self._conn.read(cap)
+                ln = len(data)
+                if ln:
+                    # Cast to a 1-D byte view so the assignment is valid
+                    # even when the caller passed a multi-dim memoryview.
+                    mv.cast("B")[:ln] = data
+                return ln
         finally:
             self._pump_out()
 
@@ -510,18 +564,33 @@ class SSLContext(_stdlib_ssl.SSLContext):
     # `_options`, etc.) can be set per-instance.
     __slots__ = ()
 
+    # Public protocol constants accepted by ``__new__``. Mirrors stdlib.
+    _CLIENT_PROTOCOLS = frozenset(
+        (
+            PROTOCOL_TLS_CLIENT,
+            PROTOCOL_TLS,
+            PROTOCOL_SSLv23,
+            PROTOCOL_TLSv1,
+            PROTOCOL_TLSv1_1,
+            PROTOCOL_TLSv1_2,
+        )
+    )
+    _SERVER_PROTOCOLS = frozenset((PROTOCOL_TLS_SERVER,))
+
     def __new__(cls, protocol: int = PROTOCOL_TLS_CLIENT) -> SSLContext:
-        if protocol not in (PROTOCOL_TLS_CLIENT, PROTOCOL_TLS, PROTOCOL_TLS_SERVER):
+        # see stdlib ``ssl.SSLContext.__new__``
+        is_client = protocol in cls._CLIENT_PROTOCOLS
+        is_server = protocol in cls._SERVER_PROTOCOLS
+        if not (is_client or is_server):
             raise ValueError(
                 f"protocol must be PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER, got {protocol!r}"
             )
         # Allocate the stdlib parent (its SSL_CTX is unused; see class docstring).
         # We pass the matching stdlib protocol constant so isinstance/repr
         # behave correctly for callers that introspect it.
-        if protocol == PROTOCOL_TLS_SERVER:
-            stdlib_proto = _stdlib_ssl.PROTOCOL_TLS_SERVER
-        else:
-            stdlib_proto = _stdlib_ssl.PROTOCOL_TLS_CLIENT
+        stdlib_proto = (
+            _stdlib_ssl.PROTOCOL_TLS_SERVER if is_server else _stdlib_ssl.PROTOCOL_TLS_CLIENT
+        )
         return super().__new__(cls, stdlib_proto)
 
     def __init__(self, protocol: int = PROTOCOL_TLS_CLIENT) -> None:
@@ -530,11 +599,13 @@ class SSLContext(_stdlib_ssl.SSLContext):
         # rejects any extra arguments. We therefore do *not* call
         # `super().__init__(...)` - the parent state is already live by the
         # time control reaches here.
-        if protocol == PROTOCOL_TLS_SERVER:
-            self._ctx = _core.Context(PROTOCOL_TLS_SERVER)
+        #
+        # The Rust FFI only knows two protocol codes 2client/3server
+        if protocol in self._SERVER_PROTOCOLS:
+            self._ctx = _core.Context(2 + 1)  # 3: TlsServer
             self._server_side = True
         else:
-            self._ctx = _core.Context(PROTOCOL_TLS_CLIENT)
+            self._ctx = _core.Context(2)  # 2: TlsClient
             self._server_side = False
         # Stored Python-side for stdlib-compat reads. Options are honored by
         # translating ``OP_NO_TLSv1_*`` into version-bound constraints
@@ -572,6 +643,11 @@ class SSLContext(_stdlib_ssl.SSLContext):
 
     @property
     def minimum_version(self) -> TLSVersion:
+        # The explicit value (if the user ever assigned one) wins so the
+        # getter round-trips stdlib sentinels - including the inverted
+        # ``MAXIMUM_SUPPORTED`` form some clients use to mean "no min".
+        if self._explicit_min_version is not None:
+            return self._explicit_min_version
         return self._min_version
 
     @minimum_version.setter
@@ -581,6 +657,8 @@ class SSLContext(_stdlib_ssl.SSLContext):
 
     @property
     def maximum_version(self) -> TLSVersion:
+        if self._explicit_max_version is not None:
+            return self._explicit_max_version
         return self._max_version
 
     @maximum_version.setter
@@ -622,6 +700,11 @@ class SSLContext(_stdlib_ssl.SSLContext):
             else TLSVersion.TLSv1_3
         )
 
+        if int(min_v) == int(TLSVersion.MAXIMUM_SUPPORTED):
+            min_v = TLSVersion.TLSv1_2
+        if int(max_v) == int(TLSVersion.MINIMUM_SUPPORTED):
+            max_v = TLSVersion.TLSv1_3
+
         if self._options & OP_NO_TLSv1_2:
             # OP_NO_TLSv1_2 forbids 1.2 -> minimum must be at least 1.3.
             if int(min_v) < int(TLSVersion.TLSv1_3):
@@ -632,7 +715,10 @@ class SSLContext(_stdlib_ssl.SSLContext):
                 max_v = TLSVersion.TLSv1_2
 
         with _ErrorRemapping():
-            self._ctx.set_version_bounds(int(min_v), int(max_v))
+            self._ctx.set_version_bounds(
+                _tls_version_to_rust_code(min_v),
+                _tls_version_to_rust_code(max_v),
+            )
         self._min_version = min_v
         self._max_version = max_v
 
@@ -661,6 +747,20 @@ class SSLContext(_stdlib_ssl.SSLContext):
         with _ErrorRemapping():
             self._ctx.set_check_hostname(bool(value))
 
+    @property
+    def hostname_checks_common_name(self) -> bool:
+        raise AttributeError(
+            "utls does not support hostname_checks_common_name"
+            " (BoringSSL only checks SAN, never CN)"
+        )
+
+    @hostname_checks_common_name.setter
+    def hostname_checks_common_name(self, value: bool) -> None:
+        raise AttributeError(
+            "utls does not support hostname_checks_common_name"
+            " (BoringSSL only checks SAN, never CN)"
+        )
+
     # ``OP_NO_TLSv1_2`` / ``OP_NO_TLSv1_3`` are translated to
     # ``minimum_version`` / ``maximum_version`` constraints (see
     # ``_apply_version_options``). Other ``OP_*`` flags are stored verbatim
@@ -669,11 +769,8 @@ class SSLContext(_stdlib_ssl.SSLContext):
     # enforces unconditionally.
 
     @property
-    def options(self) -> int:
-        # Return ``ssl.Options`` (a flag enum) instead of a raw int so callers
-        # can use idiomatic ``ssl.OP_NO_X in ctx.options`` membership tests -
-        # urllib3-future's ``is_capable_for_quic`` relies on this.
-        return _stdlib_ssl.Options(self._options)
+    def options(self) -> Options:
+        return Options(self._options)
 
     @options.setter
     def options(self, value: int) -> None:

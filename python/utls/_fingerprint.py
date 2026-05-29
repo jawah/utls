@@ -159,7 +159,6 @@ class Fingerprint:
         These are the *every-request*, non-method-specific browser headers
         (``User-Agent``, ``sec-ch-ua*``, ``Accept``, ``Accept-Encoding``,
         ``Accept-Language``, ``sec-fetch-*``, ``Upgrade-Insecure-Requests``).
-        Pseudo-headers (``:method`` / ``:path`` / ``:authority`` / ``:scheme``),
         ``Cookie``, ``Referer``, ``Host``, and ``Content-*`` are excluded
         because they are request-, session-, or body-dependent and must be
         owned by the caller.

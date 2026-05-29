@@ -7,7 +7,6 @@ from ._base import Ext, Group, SigAlg
 
 #: Per-request HTTP headers Chrome 146 stable sends on a top-level navigation
 #: from macOS, captured from a live curl-cffi 0.15 ``chrome146`` impersonation.
-#: Insertion order is the on-the-wire order observed in the H2 HEADERS frame.
 HTTP_HEADERS: dict[str, str] = {
     "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
     "sec-ch-ua-mobile": "?0",

@@ -12,7 +12,7 @@ from __future__ import annotations
 # PEM<->DER ASCII armor codecs - backported from rtls, faster than the
 # stdlib equivalents and dependency-free. Re-exported here so callers can
 # substitute ``import utls as ssl`` without losing them.
-from ssl import Options, VerifyMode  # noqa: E402
+from ssl import VerifyMode  # noqa: E402
 
 from . import _utls as _core  # noqa: F401
 from ._facade import (
@@ -55,6 +55,11 @@ from .constants import (
     OP_NO_TLSv1_1,
     OP_NO_TLSv1_2,
     OP_NO_TLSv1_3,
+    Options,
+    PROTOCOL_SSLv23,
+    PROTOCOL_TLSv1,
+    PROTOCOL_TLSv1_1,
+    PROTOCOL_TLSv1_2,
     Purpose,
     TLSVersion,
 )
@@ -81,9 +86,13 @@ __all__ = [
     "Certificate",
     "create_default_context",
     # constants
+    "PROTOCOL_SSLv23",
     "PROTOCOL_TLS",
     "PROTOCOL_TLS_CLIENT",
     "PROTOCOL_TLS_SERVER",
+    "PROTOCOL_TLSv1",
+    "PROTOCOL_TLSv1_1",
+    "PROTOCOL_TLSv1_2",
     "CERT_NONE",
     "CERT_OPTIONAL",
     "CERT_REQUIRED",

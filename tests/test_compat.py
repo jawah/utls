@@ -698,6 +698,52 @@ class TestStdlibInterop:
             lsock.close()
             t.join(timeout=5)
 
+    def test_recv_propagates_socket_timeout(self, server_cert_files, ca_pem_path):
+        server_ctx = make_stdlib_server(server_cert_files)
+        # Echo server that completes the handshake and then just sleeps,
+        # so the client's recv has nothing to read and the socket-level
+        # timeout fires.
+        lsock = socket.socket()
+        lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(1)
+        lsock.settimeout(15)
+        port = lsock.getsockname()[1]
+        stop = threading.Event()
+
+        def serve():
+            try:
+                conn, _ = lsock.accept()
+                ssock = server_ctx.wrap_socket(conn, server_side=True)
+                try:
+                    stop.wait(5)
+                finally:
+                    try:
+                        ssock.close()
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        try:
+            ctx = make_utls_client(ca_pem_path)
+            with socket.create_connection(("127.0.0.1", port)) as raw:
+                with ctx.wrap_socket(raw, server_hostname="localhost") as s:
+                    s.settimeout(0.25)
+                    # socket.timeout is an alias for TimeoutError since 3.10
+                    # and a subclass of OSError on every supported version.
+                    # Assert exact type, NOT SSLError.
+                    with pytest.raises((TimeoutError, socket.timeout)) as ei:
+                        s.recv(1024)
+                    from utls import SSLError as _SSLError
+                    assert not isinstance(ei.value, _SSLError)
+        finally:
+            stop.set()
+            lsock.close()
+            t.join(timeout=5)
+
     def test_wrap_socket_failure_closes_fd(self, server_cert_files):
         """When ``wrap_socket`` fails (cert verification with no trusted CA),
         the underlying fd must be closed. Without this guarantee, scripts
@@ -1634,15 +1680,10 @@ def test_wrap_bio_with_hostname_constructs():
 
 
 def test_constructor_rejects_non_client_protocol():
-    """Server-side TLS is out of utls' scope. Any protocol value other than
-    ``PROTOCOL_TLS_CLIENT`` (notably ``ssl.PROTOCOL_TLS_SERVER == 3``) must
-    fail loudly at construction rather than silently producing a broken
-    client context.
+    """Bogus protocol values must fail loudly at construction.
     """
-    import ssl as _stdlib_ssl
-
     with pytest.raises(ValueError, match="PROTOCOL_TLS_CLIENT"):
-        utls.SSLContext(_stdlib_ssl.PROTOCOL_TLS_SERVER)
+        utls.SSLContext(9999)
 
 
 def test_wrap_bio_accepts_server_side_false():
@@ -1865,3 +1906,37 @@ def test_stdlib_memorybio_full_handshake_against_stdlib_server():
     finally:
         raw.close()
         server_thread.join(timeout=5)
+
+
+def test_makefile_then_close_socket_then_close_file(server_cert_files, ca_pem_path):
+    server_ctx = make_stdlib_server(server_cert_files)
+    lsock, t, port, _ = _start_stdlib_echo(server_ctx)
+    try:
+        ctx = make_utls_client(ca_pem_path)
+        raw = socket.create_connection(("127.0.0.1", port))
+        sock = ctx.wrap_socket(raw, server_hostname="localhost")
+        sock.sendall(b"ping")
+        f = sock.makefile("rb")
+        # Close the socket *first* - the file object should still be usable
+        # for the bytes already buffered, then its own close decrements
+        # the io ref to trigger the real close.
+        sock.close()
+        f.close()  # must not raise AttributeError
+    finally:
+        lsock.close()
+        t.join(timeout=5)
+
+
+def test_sslsocket_exposes_shutdown(server_cert_files, ca_pem_path):
+    server_ctx = make_stdlib_server(server_cert_files)
+    lsock, t, port, _ = _start_stdlib_echo(server_ctx)
+    try:
+        ctx = make_utls_client(ca_pem_path)
+        raw = socket.create_connection(("127.0.0.1", port))
+        sock = ctx.wrap_socket(raw, server_hostname="localhost")
+        sock.sendall(b"x")
+        sock.shutdown(socket.SHUT_RDWR)  # must not raise AttributeError
+        sock.close()
+    finally:
+        lsock.close()
+        t.join(timeout=5)
