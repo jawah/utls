@@ -37,23 +37,38 @@ use crate::error::{Error, Result};
 
 /// Apply `fp` to `ssl`.
 ///
+/// `alpn_override`, when `Some`, replaces the fingerprint's ALPN list for
+/// both ALPN advertisement and ALPS gating. See
+/// [`super::spec::Fingerprint::apply_to_ssl_with_alpn_override`] for the
+/// "WebSocket-over-h1 Chrome" rationale.
+///
 /// # Safety
 ///
 /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake.
-pub unsafe fn apply(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()> {
+pub unsafe fn apply(
+    fp: &Fingerprint,
+    ssl: *mut boring_sys::SSL,
+    alpn_override: Option<&[Vec<u8>]>,
+) -> Result<()> {
     // SAFETY: caller guarantees `ssl` is a valid, pre-handshake `*mut SSL`.
     // Each helper is itself `unsafe fn` and inherits that same invariant.
     unsafe {
         apply_cipher_suites(fp, ssl)?;
         apply_supported_groups(fp, ssl)?;
         apply_signature_algorithms(fp, ssl)?;
-        apply_alpn(fp, ssl)?;
+        // ALPN: when the user explicitly set ALPN via SSLContext.set_alpn_protocols
+        // *after* set_fingerprint, the CTX-level list propagates to the new SSL
+        // automatically (BoringSSL inherits it on SSL_new). We skip applying the
+        // fingerprint's ALPN here so we don't clobber that override.
+        if alpn_override.is_none() {
+            apply_alpn(fp, ssl)?;
+        }
         apply_cert_compression(fp, ssl)?;
         apply_stapling(fp, ssl)?;
         apply_grease(fp, ssl)?;
         apply_extensions_order(fp, ssl)?;
         apply_key_shares(fp, ssl)?;
-        apply_alps(fp, ssl)?;
+        apply_alps(fp, ssl, alpn_override)?;
         apply_record_size_limit(fp, ssl)?;
         apply_ech(fp, ssl)?;
         apply_padding(fp, ssl)?;
@@ -258,13 +273,17 @@ unsafe fn apply_cert_compression(fp: &Fingerprint, ssl: *mut boring_sys::SSL) ->
     // registration is per-CTX (not per-SSL), which is fine for utls because
     // each fingerprint is owned by a single Context.
     //
-    // For a *client* we don't actually need to compress anything (the
-    // extension only advertises which decompression algorithms we'd accept
-    // from the server). We register no-op stubs: `compress` is NULL (we
-    // never send compressed certs as a client) and `decompress` is a tiny
-    // function that always returns failure, which makes BoringSSL fall
-    // back to uncompressed cert handling if the server actually tries to
-    // use one of these algorithms.
+    // For a *client* we don't need `compress` (we never send compressed
+    // certs - that direction is server-only in practice), but we **must**
+    // provide a real `decompress` for every algorithm we advertise. RFC
+    // 8879 lets the server pick any algorithm we listed; once it does,
+    // a callback that returns 0 aborts the handshake (BoringSSL does not
+    // fall back to uncompressed). Returning 0 also leaves the SSL with no
+    // validated chain, so `SSL_get_verify_result` is non-zero and the
+    // failure surfaces in Python as `SSLCertVerificationError` even though
+    // the actual root cause is a decompression refusal. Bug fixed: we now
+    // ship a real brotli decompressor and only register algorithms we can
+    // actually decompress.
     //
     // Registration is idempotent in the wrong direction: BoringSSL rejects
     // duplicate alg_ids with "one error". To stay safe across repeated
@@ -273,26 +292,82 @@ unsafe fn apply_cert_compression(fp: &Fingerprint, ssl: *mut boring_sys::SSL) ->
     if fp.compress_certificate.is_empty() {
         return Ok(());
     }
-    extern "C" fn decompress_stub(
+
+    /// Brotli decompression callback for `compress_certificate` (alg 2).
+    ///
+    /// Called by BoringSSL after the server sends a CompressedCertificate
+    /// message. The compressed payload is `(in_buf, in_len)`; the expected
+    /// uncompressed length (advertised by the server) is `uncompressed_len`.
+    /// On success we must populate `*out` with a freshly allocated
+    /// `CRYPTO_BUFFER` of *exactly* `uncompressed_len` bytes and return 1.
+    /// Returning 0 is a fatal handshake error.
+    extern "C" fn brotli_decompress(
         _ssl: *mut boring_sys::SSL,
-        _out: *mut *mut boring_sys::CRYPTO_BUFFER,
-        _uncompressed_len: usize,
-        _in_buf: *const u8,
-        _in_len: usize,
+        out: *mut *mut boring_sys::CRYPTO_BUFFER,
+        uncompressed_len: usize,
+        in_buf: *const u8,
+        in_len: usize,
     ) -> std::os::raw::c_int {
-        0
+        const MAX_CERT_BYTES: usize = 1 << 20; // 1 MiB
+        const INITIAL_CAP: usize = 64 * 1024; // 64 KiB
+
+        if in_buf.is_null() || out.is_null() {
+            return 0; // Defensive: BoringSSL never passes nulls, but be safe.
+        }
+        if uncompressed_len == 0 || uncompressed_len > MAX_CERT_BYTES {
+            return 0;
+        }
+        // SAFETY: BoringSSL hands us a valid (in_buf, in_len) describing
+        // the on-the-wire CompressedCertificate payload. We only read.
+        let compressed = unsafe { std::slice::from_raw_parts(in_buf, in_len) };
+
+        let mut decoded: Vec<u8> = Vec::with_capacity(INITIAL_CAP.min(uncompressed_len));
+        let mut input = compressed;
+        let mut decoder = brotli::Decompressor::new(&mut input, 4096);
+        // Cap actual reads at uncompressed_len + 1: if the decoder produces
+        // more, the peer lied about the length and we reject. We use
+        // `Read::take` to enforce this without growing `decoded` past the
+        // declared size.
+        let mut limited = std::io::Read::take(&mut decoder, (uncompressed_len as u64) + 1);
+        if std::io::Read::read_to_end(&mut limited, &mut decoded).is_err() {
+            return 0;
+        }
+        if decoded.len() != uncompressed_len {
+            // RFC 8879: the uncompressed_len field MUST match the actual
+            // size of the decompressed Certificate message exactly.
+            return 0;
+        }
+        // SAFETY: CRYPTO_BUFFER_new copies `decoded.len()` bytes from our
+        // pointer; passing a null pool means "use the global pool". A NULL
+        // return means OOM (rare) which we surface as decompression failure.
+        let buf = unsafe {
+            boring_sys::CRYPTO_BUFFER_new(decoded.as_ptr(), decoded.len(), std::ptr::null_mut())
+        };
+        if buf.is_null() {
+            return 0;
+        }
+        // SAFETY: caller-provided out-slot is a valid `*mut *mut CRYPTO_BUFFER`.
+        unsafe {
+            *out = buf;
+        }
+        1
     }
+
     let ctx = unsafe { boring_sys::SSL_get_SSL_CTX(ssl) };
     if ctx.is_null() {
         return Err(Error::Usage("SSL_get_SSL_CTX returned null".into()));
     }
     for alg in &fp.compress_certificate {
         let alg_id: u16 = alg.codepoint();
+        // Only brotli is implemented anyway.
+        let decompress: boring_sys::ssl_cert_decompression_func_t = match alg_id {
+            2 => Some(brotli_decompress),
+            _ => continue,
+        };
         // SAFETY: `ctx` is a valid SSL_CTX from a live SSL; the function
         // pointer is `extern "C"` with the exact prototype BoringSSL expects.
-        let rc = unsafe {
-            boring_sys::SSL_CTX_add_cert_compression_alg(ctx, alg_id, None, Some(decompress_stub))
-        };
+        let rc =
+            unsafe { boring_sys::SSL_CTX_add_cert_compression_alg(ctx, alg_id, None, decompress) };
         if rc != 1 {
             // Duplicate registration on a reused CTX is fine; drain and ignore.
             // SAFETY: ERR_get_error is thread-local and always safe.
@@ -396,7 +471,11 @@ unsafe fn apply_key_shares(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Resul
     Ok(())
 }
 
-unsafe fn apply_alps(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()> {
+unsafe fn apply_alps(
+    fp: &Fingerprint,
+    ssl: *mut boring_sys::SSL,
+    alpn_override: Option<&[Vec<u8>]>,
+) -> Result<()> {
     if fp.alps.is_empty() {
         return Ok(());
     }
@@ -416,8 +495,19 @@ unsafe fn apply_alps(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()> 
     // `boring-sys = "5"`). We pass an empty settings blob - clients only
     // need to advertise the codepoint pre-handshake; real settings are
     // negotiated during the handshake and don't change the ClientHello.
+    //
+    // When the caller has overridden ALPN (via SSLContext.set_alpn_protocols),
+    // skip ALPS entries whose protocol is no longer offered. Chrome never
+    // advertises ALPS for a protocol it didn't also list in ALPN; emitting
+    // an orphan ALPS entry would produce an internally incoherent ClientHello
+    // that no real Chrome ever sends, which would itself defeat impersonation.
     for proto in &fp.alps {
         let b = proto.as_bytes();
+        if let Some(override_list) = alpn_override {
+            if !override_list.iter().any(|p| p.as_slice() == b) {
+                continue;
+            }
+        }
         // SAFETY: pointer + length valid; passing 0-length settings is allowed.
         let rc = unsafe {
             boring_sys::SSL_add_application_settings(ssl, b.as_ptr(), b.len(), std::ptr::null(), 0)

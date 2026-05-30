@@ -138,7 +138,28 @@ impl Fingerprint {
     /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake.
     pub unsafe fn apply_to_ssl(&self, ssl: *mut boring_sys::SSL) -> crate::error::Result<()> {
         // SAFETY: contract delegated to caller.
-        unsafe { super::apply::apply(self, ssl) }
+        unsafe { super::apply::apply(self, ssl, None) }
+    }
+
+    /// Same as [`Self::apply_to_ssl`], but caller-supplied `alpn_override`
+    /// replaces the fingerprint's ALPN list for both the wire ALPN extension
+    /// and the ALPS gating. Pass `Some(&list)` when the user explicitly
+    /// called `SSLContext.set_alpn_protocols(...)` after `set_fingerprint(...)`:
+    /// the fingerprint stays Chrome in every other respect, but ALPN reflects
+    /// the user's intent and ALPS entries for protocols no longer offered
+    /// are skipped so the ClientHello stays internally coherent (Chrome
+    /// never sends ALPS for an ALPN protocol it didn't also offer).
+    ///
+    /// # Safety
+    ///
+    /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake.
+    pub unsafe fn apply_to_ssl_with_alpn_override(
+        &self,
+        ssl: *mut boring_sys::SSL,
+        alpn_override: &[Vec<u8>],
+    ) -> crate::error::Result<()> {
+        // SAFETY: contract delegated to caller.
+        unsafe { super::apply::apply(self, ssl, Some(alpn_override)) }
     }
 
     /// Convert to a key/value map for Python's `Fingerprint.to_dict()`.

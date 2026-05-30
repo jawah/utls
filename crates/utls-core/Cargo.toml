@@ -15,6 +15,7 @@ path = "src/lib.rs"
 boring-sys = { workspace = true }
 libc       = { workspace = true }
 thiserror  = { workspace = true }
+brotli     = { workspace = true }
 
 [features]
 default = []

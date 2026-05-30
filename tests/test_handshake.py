@@ -99,3 +99,30 @@ def test_verification_rejects_bad_cn():
         except OSError:
             pass
         t.join(timeout=5)
+
+
+@pytest.mark.parametrize("host", ["www.cloudflare.com", "blog.cloudflare.com"])
+def test_chrome_fingerprint_handshakes_through_brotli_cert_compression(host, requires_network):
+    ctx = utls.SSLContext()
+    ctx.set_fingerprint("chrome:stable")
+    ctx.load_default_certs()
+    with socket.create_connection((host, 443), timeout=10) as raw:
+        with ctx.wrap_socket(raw, server_hostname=host) as s:
+            assert s.version() in {"TLSv1.3", "TLSv1.2"}
+            # ALPN must still negotiate normally, cert compression must
+            # not break later handshake steps.
+            assert s.selected_alpn_protocol() in {"h2", "http/1.1"}
+
+
+def test_set_alpn_protocols_after_set_fingerprint_overrides_fingerprint_alpn(requires_network):
+    host = "www.cloudflare.com"
+    ctx = utls.SSLContext()
+    ctx.set_fingerprint("chrome:stable")
+    ctx.set_alpn_protocols(["http/1.1"])
+    ctx.load_default_certs()
+    with socket.create_connection((host, 443), timeout=10) as raw:
+        with ctx.wrap_socket(raw, server_hostname=host) as s:
+            assert s.selected_alpn_protocol() == "http/1.1", (
+                f"expected http/1.1, server negotiated "
+                f"{s.selected_alpn_protocol()!r} (fingerprint ALPN leaked)"
+            )

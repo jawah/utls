@@ -1093,10 +1093,23 @@ impl Context {
 
         // Fingerprint, if any.
         if let Some(fp) = self.fingerprint() {
+            // If the user explicitly called set_alpn_protocols(...) after
+            // set_fingerprint(...), pass that list as an override: the
+            // fingerprint stays Chrome in every other respect, but ALPN
+            // reflects the user's intent (e.g. ["http/1.1"] for Chrome's
+            // WebSocket-over-h1 path) and ALPS entries for protocols no
+            // longer offered are skipped so we don't emit an internally
+            // incoherent ALPS-without-ALPN ClientHello that no real Chrome
+            // ever sends.
+            let alpn_override = self.alpn_list_snapshot();
             // SAFETY: ssl is fresh and not yet in handshake; Fingerprint::apply
             // contractually only touches knobs that are legal pre-handshake.
             unsafe {
-                fp.apply_to_ssl(ssl.as_ptr())?;
+                if alpn_override.is_empty() {
+                    fp.apply_to_ssl(ssl.as_ptr())?;
+                } else {
+                    fp.apply_to_ssl_with_alpn_override(ssl.as_ptr(), &alpn_override)?;
+                }
             }
         }
 
@@ -1263,6 +1276,47 @@ impl Connection {
 
         buf.truncate(filled);
         Ok(buf)
+    }
+
+    /// for `SSLSocket.recv_into`
+    pub fn read_into(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        // Cap at SSL_read's i32 limit; the caller's buffer might be huge.
+        let cap = buf.len().min(i32::MAX as usize);
+        let mut filled: usize = 0;
+
+        loop {
+            let remaining = cap - filled;
+            if remaining == 0 {
+                break;
+            }
+            // SAFETY: buf is a valid mutable slice; we write within bounds.
+            let rc = unsafe {
+                boring_sys::SSL_read(
+                    self.ssl.as_ptr(),
+                    buf.as_mut_ptr().add(filled) as *mut _,
+                    remaining as i32,
+                )
+            };
+            if rc > 0 {
+                filled += rc as usize;
+                // Drain additional records into the rest of the buffer
+                // without another userland round-trip, same as `read`.
+                continue;
+            }
+            let err = self.translate_ssl_error(rc);
+            if filled > 0 && matches!(err, Error::WantRead | Error::WantWrite | Error::ZeroReturn) {
+                break;
+            }
+            if filled == 0 {
+                return Err(err);
+            }
+            break;
+        }
+
+        Ok(filled)
     }
 
     /// Encrypt and queue `data` for sending. Returns bytes accepted by the

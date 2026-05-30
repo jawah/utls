@@ -1,6 +1,13 @@
 Release History
 ===============
 
+2026.5.30
+---------
+
+- Fixed `set_fingerprint("chrome:*")` causing handshake failure against servers that honor cert compression.
+- Fixed `set_alpn_protocols(...)` called after `set_fingerprint(...)` being silently ignored; the fingerprint's per-connection `SSL_set_alpn_protos` dismissed the user override.
+- Fixed RSS climbing to the lifetime peak of buffered ciphertext.
+
 2026.5.29
 ---------
 
