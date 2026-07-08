@@ -2,8 +2,10 @@
 //!
 //! This module is the meeting point between *what we want to emit* (the
 //! declarative `Fingerprint`) and *what BoringSSL is willing to let us
-//! control*. As of `boring-sys = "5"` (BoringSSL snapshot Sept 2025+),
-//! every knob we need is upstream - no patches required.
+//! control*. We track `boring-sys` at a `cloudflare/boring` master revision
+//! whose vendored BoringSSL carries native ML-DSA (FIPS 204) TLS support
+//! (`SSL_SIGN_ML_DSA_44/65/87`); every knob we need is upstream - no
+//! patches required.
 //!
 //! ## Upstream BoringSSL APIs we use
 //!
@@ -11,7 +13,8 @@
 //!   `SSL_set_cipher_list` (TLS 1.2).
 //! * `supported_groups` - `SSL_set1_groups_list` (accepts the name
 //!   `X25519MLKEM768` natively).
-//! * `signature_algorithms` - `SSL_set1_sigalgs_list`.
+//! * `signature_algorithms` - `SSL_set_verify_algorithm_prefs` (raw
+//!   uint16 codepoints, so post-quantum ML-DSA schemes go out verbatim).
 //! * `alpn` - `SSL_set_alpn_protos`.
 //! * `alps` - `SSL_add_application_settings`.
 //! * `grease` - `SSL_CTX_set_grease_enabled`.
@@ -199,45 +202,23 @@ unsafe fn apply_signature_algorithms(fp: &Fingerprint, ssl: *mut boring_sys::SSL
     if fp.signature_algorithms.is_empty() {
         return Ok(());
     }
-    // BoringSSL's `SSL_set1_sigalgs_list` accepts only *names* (the
-    // TLS 1.3 SignatureScheme strings), not raw hex codepoints. We map
-    // and silently drop unknowns; fingerprint metadata is preserved for
-    // JA3/JA4 hashing.
-    fn name_for(codepoint: u16) -> Option<&'static str> {
-        match codepoint {
-            // RSASSA-PKCS1-v1_5
-            0x0401 => Some("rsa_pkcs1_sha256"),
-            0x0501 => Some("rsa_pkcs1_sha384"),
-            0x0601 => Some("rsa_pkcs1_sha512"),
-            0x0201 => Some("rsa_pkcs1_sha1"),
-            // ECDSA
-            0x0403 => Some("ecdsa_secp256r1_sha256"),
-            0x0503 => Some("ecdsa_secp384r1_sha384"),
-            0x0603 => Some("ecdsa_secp521r1_sha512"),
-            0x0203 => Some("ecdsa_sha1"),
-            // RSASSA-PSS with public key OID rsaEncryption
-            0x0804 => Some("rsa_pss_rsae_sha256"),
-            0x0805 => Some("rsa_pss_rsae_sha384"),
-            0x0806 => Some("rsa_pss_rsae_sha512"),
-            // EdDSA
-            0x0807 => Some("ed25519"),
-            0x0808 => Some("ed448"),
-            _ => None,
-        }
-    }
-    let names: Vec<&str> = fp
-        .signature_algorithms
-        .iter()
-        .filter_map(|&cp| name_for(cp))
-        .collect();
-    if names.is_empty() {
-        return Ok(());
-    }
-    let s = CString::new(names.join(":")).unwrap();
-    // SAFETY: ssl + nul-term string valid.
-    let rc = unsafe { boring_sys::SSL_set1_sigalgs_list(ssl, s.as_ptr()) };
+    // The advertised `signature_algorithms` extension is the client's *verify*
+    // preference list (the schemes it will accept in the peer's certificate).
+    // We set it by raw uint16 codepoint via `SSL_set_verify_algorithm_prefs`
+    // rather than the name-based `SSL_set1_sigalgs_list`: the latter only
+    // understands schemes BoringSSL has a string name for, so it would
+    // silently drop anything newer than the library's built-in table (e.g.
+    // the ML-DSA / FIPS 204 codepoints Chrome 150+ advertises), putting a
+    // JA4 on the wire that disagrees with the one we compute from the spec.
+    // Codepoints go out verbatim, so the wire matches the fingerprint exactly.
+    let prefs: Vec<u16> = fp.signature_algorithms.clone();
+    // SAFETY: `ssl` valid pre-handshake; `prefs` outlives the call, which
+    // copies the array. `num_prefs` is the element count, not byte length.
+    let rc = unsafe {
+        boring_sys::SSL_set_verify_algorithm_prefs(ssl, prefs.as_ptr(), prefs.len())
+    };
     if rc != 1 {
-        return Err(Error::from_boring_queue("SSL_set1_sigalgs_list"));
+        return Err(Error::from_boring_queue("SSL_set_verify_algorithm_prefs"));
     }
     Ok(())
 }

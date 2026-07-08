@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Callable
 
 from .._fingerprint import Fingerprint
-from . import chrome_131, chrome_142, chrome_146, chrome_148, chrome_stable
+from . import chrome_131, chrome_142, chrome_146, chrome_148, chrome_150, chrome_stable
 
 _REGISTRY: dict[str, Callable[[], Fingerprint]] = {
     "chrome:131": chrome_131.build,
     "chrome:142": chrome_142.build,
     "chrome:146": chrome_146.build,
     "chrome:148": chrome_148.build,
+    "chrome:150": chrome_150.build,
     "chrome:stable": chrome_stable.build,
 }
 

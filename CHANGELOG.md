@@ -1,6 +1,13 @@
 Release History
 ===============
 
+2026.7.8
+--------
+
+- Added `chrome:150` profile and moved `chrome:stable` to it. Chrome 150 is the first stable major to advertise post-quantum ML-DSA (FIPS 204) signature algorithms (`mldsa44`/`mldsa65`/`mldsa87`) in the `signature_algorithms` extension; this changes the TLS layer and the JA4 versus the 142/146/148 line.
+- `signature_algorithms` are now emitted by raw codepoint via `SSL_set_verify_algorithm_prefs` instead of name-mapped through `SSL_set1_sigalgs_list`. The old path silently dropped any scheme BoringSSL had no string name for (e.g. ML-DSA), which would have put a JA4 on the wire that disagreed with the computed one.
+- Pinned `boring-sys` to a `cloudflare/boring` master revision (post PR #509, BoringSSL `e2a57cfb4`) so the vendored BoringSSL understands the ML-DSA signature codepoints. crates.io `boring-sys` 5.1.0 predates ML-DSA.
+
 2026.5.30
 ---------
 

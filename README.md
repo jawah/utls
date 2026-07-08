@@ -103,7 +103,7 @@ The bundled profile registry can be inspected at runtime:
 from utls import Fingerprint, presets
 
 print(presets())
-# ['chrome:131', 'chrome:142', 'chrome:146', 'chrome:148', 'chrome:stable']
+# ['chrome:131', 'chrome:142', 'chrome:146', 'chrome:148', 'chrome:150', 'chrome:stable']
 
 fp = Fingerprint.from_preset("chrome:stable")
 print(fp.ja3_hash, fp.ja4_hash)
@@ -168,7 +168,10 @@ The JA4 hash is the fingerprint identity that bot-detection vendors and
 TLS observatories actually index on. `chrome:142` / `chrome:146` /
 `chrome:148` share the same JA4 because they share the same TLS-layer
 ClientHello (the deltas are HTTP-layer); `chrome:131` differs because it
-uses the legacy ALPS codepoint (`0x4469` vs `0x44cd`).
+uses the legacy ALPS codepoint (`0x4469` vs `0x44cd`). `chrome:150` also
+differs: it is the first stable major to advertise post-quantum ML-DSA
+(FIPS 204) signature algorithms, which changes the `signature_algorithms`
+bytes and therefore the JA4.
 
 #### Why JA3 varies but JA4 stays put
 

@@ -71,3 +71,7 @@ class SigAlg(enum.IntEnum):
     # Ed25519 / Ed448
     ed25519 = 0x0807
     ed448 = 0x0808
+    # Post-quantum ML-DSA. Chrome 150+ advertises these.
+    mldsa44 = 0x0904
+    mldsa65 = 0x0905
+    mldsa87 = 0x0906

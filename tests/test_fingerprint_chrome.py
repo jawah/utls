@@ -65,7 +65,8 @@ def test_ja4_pin_matches_rust():
         ("chrome:142", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
         ("chrome:146", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
         ("chrome:148", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
-        ("chrome:stable", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
+        ("chrome:150", "t13d1516h2_8daaf6152771_806a8c22fdea"),
+        ("chrome:stable", "t13d1516h2_8daaf6152771_806a8c22fdea"),
     ],
 )
 def test_ja4_matches_real_chrome_capture(name: str, expected_ja4: str) -> None:
