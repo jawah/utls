@@ -186,7 +186,10 @@ jobs:
         if: matrix.build.target == 'aarch64' && matrix.build.manylinux == 'manylinux_2_28'
         uses: PyO3/maturin-action@v1
         env:
-          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
+          CC_aarch64_unknown_linux_gnu: clang
+          CXX_aarch64_unknown_linux_gnu: clang++
+          CFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
+          CXXFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
         with:
           target: ${{ matrix.build.target }}
@@ -198,7 +201,7 @@ jobs:
             # ghcr.io/rust-cross/manylinux_2_28-cross:aarch64 is Ubuntu-based
             # and ships gcc 7.5 (C++17 capable), cmake 3.22, and clang 14.
             # Only Go is missing; BoringSSL needs it for code generation.
-            apt-get update && apt-get install -y golang-go
+            apt-get update && apt-get install -y golang-go clang
             export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
 
       - name: Build wheels (aarch64 + musllinux_1_1)
