@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from .._fingerprint import Fingerprint
-from ._base import SigAlg
 from . import chrome_148 as _prev
+from ._base import SigAlg
 
 HTTP_HEADERS: dict[str, str] = {
     "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',

@@ -214,9 +214,8 @@ unsafe fn apply_signature_algorithms(fp: &Fingerprint, ssl: *mut boring_sys::SSL
     let prefs: Vec<u16> = fp.signature_algorithms.clone();
     // SAFETY: `ssl` valid pre-handshake; `prefs` outlives the call, which
     // copies the array. `num_prefs` is the element count, not byte length.
-    let rc = unsafe {
-        boring_sys::SSL_set_verify_algorithm_prefs(ssl, prefs.as_ptr(), prefs.len())
-    };
+    let rc =
+        unsafe { boring_sys::SSL_set_verify_algorithm_prefs(ssl, prefs.as_ptr(), prefs.len()) };
     if rc != 1 {
         return Err(Error::from_boring_queue("SSL_set_verify_algorithm_prefs"));
     }
