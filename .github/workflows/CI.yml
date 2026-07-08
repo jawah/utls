@@ -188,8 +188,8 @@ jobs:
         env:
           CC_aarch64_unknown_linux_gnu: clang
           CXX_aarch64_unknown_linux_gnu: clang++
-          CFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
-          CXXFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
+          CFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot --gcc-toolchain=/usr/aarch64-unknown-linux-gnu"
+          CXXFLAGS_aarch64_unknown_linux_gnu: "--target=aarch64-unknown-linux-gnu --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot --gcc-toolchain=/usr/aarch64-unknown-linux-gnu"
           UNSAFE_PYO3_SKIP_VERSION_CHECK: 1
         with:
           target: ${{ matrix.build.target }}
@@ -203,6 +203,10 @@ jobs:
             # Only Go is missing; BoringSSL needs it for code generation.
             apt-get update && apt-get install -y golang-go clang
             export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
+            # Diagnostics
+            echo "crtbeginS.o location: "; find / -name 'crtbeginS.o' 2>/dev/null || true
+            echo "libgcc.a location: ";    find / -name 'libgcc.a'    2>/dev/null || true
+            echo "cross/gcc tree: "; ls -d /usr/aarch64-unknown-linux-gnu/lib/gcc/*/*/ 2>/dev/null || true
 
       - name: Build wheels (aarch64 + musllinux_1_1)
         if: matrix.build.target == 'aarch64' && matrix.build.manylinux == 'musllinux_1_1'
