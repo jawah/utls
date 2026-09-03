@@ -1,6 +1,23 @@
 Release History
 ===============
 
+2026.9.3
+--------
+
+- Added `chrome:152` profile and moved `chrome:stable` to it. Chrome 152
+  is the first stable major to send the `trust_anchors` extension
+  (`0xCA34`, draft-ietf-tls-trust-anchor-ids) with the Chrome Root Store
+  ID list. Cipher suites, groups, and ML-DSA signature algorithms are
+  unchanged from `chrome:150`; the extra extension changes the JA4 from
+  `t13d1516h2_…` to `t13d1517h2_8daaf6152771_cb7bf5808d99`.
+- `trust_anchors` is now a first-class Fingerprint field, applied via
+  BoringSSL's `SSL_set1_requested_trust_anchors`.
+- Chrome 152 also prepends a per-connection GREASE value to
+  `signature_algorithms` (visible in PeetPrint, stripped from JA4).
+  Wired via `SSL_CTX_set_grease_sigalgs_enabled`. Builds compile
+  BoringSSL from `vendor/boringssl` because `cloudflare/boring`'s
+  vendored snapshot still predates this API.
+
 2026.7.8
 --------
 

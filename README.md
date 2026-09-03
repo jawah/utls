@@ -2,9 +2,9 @@ BoringSSL-backed TLS for CPython, with Chrome impersonation
 -----------------------------------------------------------
 
 Drop-in replacement for the `ssl` stdlib with a `Fingerprint` API for Chrome
-impersonation. Built on stock BoringSSL through `boring-sys` - no vendored
-patches, no curl-impersonate, no Go runtime at import time. Use it with any
-known Python http client you like or used to.
+impersonation. Built on stock BoringSSL through `boring-sys` - no
+curl-impersonate, no Go runtime at import time. Use it with any known
+Python http client you like or used to.
 
 Supports CPython 3.7 onward, including freethreaded builds.
 
@@ -37,10 +37,23 @@ are read and merged.
 
 ### Getting Started
 
-Install from PyPI (pre-built wheels for Linux, macOS, and Windows):
+Install a pre-built wheel from GitHub Releases (Linux, macOS, Windows):
 
 ```
-pip install utls
+# copy the wheel URL for your platform from
+# https://github.com/xiaoweigege/utls/releases
+pip install https://github.com/xiaoweigege/utls/releases/download/2026.9.3/utls-2026.9.3-cp37-abi3-macosx_11_0_arm64.whl
+```
+
+Upstream PyPI (`pip install utls`) is the original `jawah/utls` package and
+does not include these Chrome 152 changes.
+
+From source, initialize the BoringSSL checkout first (Chrome 152 GREASE
+in `signature_algorithms` needs a snapshot newer than the one bundled
+with `cloudflare/boring`):
+
+```
+git submodule update --init --recursive
 ```
 
 Then swap `ssl` for `utls` anywhere in your code:
@@ -103,7 +116,7 @@ The bundled profile registry can be inspected at runtime:
 from utls import Fingerprint, presets
 
 print(presets())
-# ['chrome:131', 'chrome:142', 'chrome:146', 'chrome:148', 'chrome:150', 'chrome:stable']
+# ['chrome:131', 'chrome:142', 'chrome:146', 'chrome:148', 'chrome:150', 'chrome:152', 'chrome:stable']
 
 fp = Fingerprint.from_preset("chrome:stable")
 print(fp.ja3_hash, fp.ja4_hash)
@@ -159,10 +172,10 @@ For HTTP/1.1, prepend `Host` at position 0 to preserve Chrome's wire order.
 
 - `chrome:stable` always tracks the newest Chrome major shipped in a utls
   release. Use this if you want to drift with Chrome without code changes.
-- `chrome:148`, `chrome:146`, `chrome:142`, `chrome:131` pin to specific
-  Chrome majors. Use these when reproducibility matters - e.g. a long-
-  running scraper that should not silently change shape when utls is
-  upgraded.
+- `chrome:152`, `chrome:150`, `chrome:148`, `chrome:146`, `chrome:142`,
+  `chrome:131` pin to specific Chrome majors. Use these when
+  reproducibility matters - e.g. a long-running scraper that should not
+  silently change shape when utls is upgraded.
 
 The JA4 hash is the fingerprint identity that bot-detection vendors and
 TLS observatories actually index on. `chrome:142` / `chrome:146` /
@@ -171,7 +184,8 @@ ClientHello (the deltas are HTTP-layer); `chrome:131` differs because it
 uses the legacy ALPS codepoint (`0x4469` vs `0x44cd`). `chrome:150` also
 differs: it is the first stable major to advertise post-quantum ML-DSA
 (FIPS 204) signature algorithms, which changes the `signature_algorithms`
-bytes and therefore the JA4.
+bytes and therefore the JA4. `chrome:152` adds the `trust_anchors`
+extension (`0xCA34`), taking the JA4 extension count from 16 to 17.
 
 #### Why JA3 varies but JA4 stays put
 

@@ -198,8 +198,10 @@ impl PyFingerprint {
         compress_certificate = None,
         record_size_limit = None,
         grease = true,
+        grease_sigalgs = false,
         ech = None,
         padding = None,
+        trust_anchors = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -214,8 +216,10 @@ impl PyFingerprint {
         compress_certificate: Option<Vec<String>>,
         record_size_limit: Option<u16>,
         grease: bool,
+        grease_sigalgs: bool,
         ech: Option<Py<PyAny>>,
         padding: Option<usize>,
+        trust_anchors: Option<Vec<u8>>,
     ) -> PyResult<Self> {
         let mut b = core::Fingerprint::builder()
             .cipher_suites(cipher_suites.unwrap_or_default())
@@ -228,7 +232,9 @@ impl PyFingerprint {
             .alps_use_new_codepoint(alps_use_new_codepoint)
             .record_size_limit(record_size_limit)
             .grease(grease)
-            .padding(padding);
+            .grease_sigalgs(grease_sigalgs)
+            .padding(padding)
+            .trust_anchors(trust_anchors);
         if let Some(names) = compress_certificate {
             let mut algs = Vec::with_capacity(names.len());
             for n in names {
@@ -274,6 +280,8 @@ impl PyFingerprint {
                 Bool(x) => x.into_py_any(py)?,
                 Str(x) => x.into_py_any(py)?,
                 Bytes(x) => PyBytes::new(py, &x).into_py_any(py)?,
+                OptBytes(None) => py.None().into_py_any(py)?,
+                OptBytes(Some(x)) => PyBytes::new(py, &x).into_py_any(py)?,
             };
             d.set_item(k, value)?;
         }

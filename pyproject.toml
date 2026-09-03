@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "utls"
-version = "2026.7.8"
+version = "2026.9.3"
 description = "Drop-in ssl stdlib library using BoringSSL with first-class fingerprint impersonation."
 readme = "README.md"
 requires-python = ">=3.7"
@@ -36,9 +36,9 @@ dependencies = [
 ]
 
 [project.urls]
-Repository  = "https://github.com/jawah/utls"
-Issues      = "https://github.com/jawah/utls/issues"
-Changelog   = "https://github.com/jawah/utls/blob/main/CHANGELOG.md"
+Repository  = "https://github.com/xiaoweigege/utls"
+Issues      = "https://github.com/xiaoweigege/utls/issues"
+Changelog   = "https://github.com/xiaoweigege/utls/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = [

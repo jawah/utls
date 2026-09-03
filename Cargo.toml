@@ -6,16 +6,19 @@ members = [
 ]
 
 [workspace.package]
-version = "2026.7.8"
+version = "2026.9.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/jawah/utls"
-homepage = "https://github.com/jawah/utls"
+repository = "https://github.com/xiaoweigege/utls"
+homepage = "https://github.com/xiaoweigege/utls"
 authors = ["Ahmed TAHRI"]
 
 [workspace.dependencies]
-# Pinned to a cloudflare/boring master commit for ML-DSA
+# cloudflare/boring FFI. The C library itself is compiled from
+# vendor/boringssl (see .cargo/config.toml) so we pick up
+# SSL_CTX_set_grease_sigalgs_enabled, which this crate's vendored
+# snapshot (e2a57cfb4) does not yet contain.
 boring-sys = { git = "https://github.com/cloudflare/boring", rev = "931385ed41df448c82d150219f69af56e3c8399f" }
 libc = "0.2"
 thiserror = "1"

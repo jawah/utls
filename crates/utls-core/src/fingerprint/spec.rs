@@ -18,8 +18,11 @@
 //! * `compress_certificate`  - `compress_certificate` algorithm names ("brotli", "zlib", "zstd").
 //! * `record_size_limit`     - value for `record_size_limit` if present.
 //! * `grease`                - whether to interleave GREASE values.
+//! * `grease_sigalgs`        - GREASE in `signature_algorithms` (Chrome 152+).
 //! * `ech`                   - `false`, `true` (offer GREASE ECH), or `bytes` (offer real ECH config).
 //! * `padding`               - fixed extension-padding target length, or None.
+//! * `trust_anchors`         - wire-format trust-anchor IDs for extension
+//!                             `0xCA34` (Chrome 152+). `None` omits it.
 
 use std::collections::BTreeMap;
 
@@ -27,6 +30,11 @@ use std::collections::BTreeMap;
 /// extension placeholder here". GREASE codepoints proper are 0x?A?A; we
 /// pick `0xFFFE` as a private-use sentinel that cannot collide.
 pub const GREASE_EXTENSION: u16 = 0xFFFE;
+
+/// `trust_anchors` extension (draft-ietf-tls-trust-anchor-ids). Chrome 152+
+/// sends this on every ClientHello. Not yet IANA-assigned; BoringSSL and
+/// Chromium use `0xCA34`.
+pub const TRUST_ANCHORS_EXTENSION: u16 = 0xCA34;
 
 /// A complete ClientHello specification.
 ///
@@ -56,8 +64,19 @@ pub struct Fingerprint {
     pub compress_certificate: Vec<CertCompressAlg>,
     pub record_size_limit: Option<u16>,
     pub grease: bool,
+    /// Chrome 152+ prepends a per-connection GREASE value to
+    /// `signature_algorithms`. This is a *separate* BoringSSL toggle
+    /// (`SSL_CTX_set_grease_sigalgs_enabled`); it is not implied by
+    /// `grease`. Only meaningful when `grease` is also true.
+    pub grease_sigalgs: bool,
     pub ech: EchPolicy,
     pub padding: Option<usize>,
+    /// Wire-format trust-anchor IDs for `trust_anchors` (`0xCA34`): a
+    /// concatenation of non-empty 8-bit length-prefixed IDs, *without* the
+    /// TLS extension's outer 2-byte length. `None` omits the extension.
+    /// `Some(v)` emits it even when `v` is empty (BoringSSL still sends
+    /// the extension; an empty list is the retry-flow signal).
+    pub trust_anchors: Option<Vec<u8>>,
 }
 
 /// Certificate-compression algorithm IDs we know how to assert in the
@@ -118,8 +137,10 @@ impl Default for Fingerprint {
             compress_certificate: Vec::new(),
             record_size_limit: None,
             grease: true,
+            grease_sigalgs: false,
             ech: EchPolicy::Off,
             padding: None,
+            trust_anchors: None,
         }
     }
 }
@@ -192,6 +213,7 @@ impl Fingerprint {
         );
         m.insert("record_size_limit", OptU16(self.record_size_limit));
         m.insert("grease", Bool(self.grease));
+        m.insert("grease_sigalgs", Bool(self.grease_sigalgs));
         m.insert("permute_extensions", Bool(self.permute_extensions));
         m.insert(
             "ech",
@@ -202,6 +224,7 @@ impl Fingerprint {
             },
         );
         m.insert("padding", OptUsize(self.padding));
+        m.insert("trust_anchors", OptBytes(self.trust_anchors.clone()));
         m
     }
 }
@@ -216,6 +239,7 @@ pub enum FpValue {
     Bool(bool),
     Str(String),
     Bytes(Vec<u8>),
+    OptBytes(Option<Vec<u8>>),
 }
 
 /// Builder. Every field is independently optional, matching the Python
@@ -272,12 +296,20 @@ impl FingerprintBuilder {
         self.0.grease = v;
         self
     }
+    pub fn grease_sigalgs(mut self, v: bool) -> Self {
+        self.0.grease_sigalgs = v;
+        self
+    }
     pub fn ech(mut self, v: EchPolicy) -> Self {
         self.0.ech = v;
         self
     }
     pub fn padding(mut self, v: Option<usize>) -> Self {
         self.0.padding = v;
+        self
+    }
+    pub fn trust_anchors(mut self, v: Option<Vec<u8>>) -> Self {
+        self.0.trust_anchors = v;
         self
     }
     pub fn build(self) -> Fingerprint {

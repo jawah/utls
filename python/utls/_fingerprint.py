@@ -50,8 +50,10 @@ class Fingerprint:
         record_size_limit: int | None = None,
         compress_certificate: Iterable[str] | None = None,
         grease: bool = True,
+        grease_sigalgs: bool = False,
         ech: bool | bytes = False,
         padding: int | None = None,
+        trust_anchors: bytes | bytearray | None = None,
         http_headers: Mapping[str, str] | None = None,
     ) -> None:
         if ja3 is not None or ja4 is not None:
@@ -75,8 +77,10 @@ class Fingerprint:
             compress_certificate=list(compress_certificate or ()),
             record_size_limit=record_size_limit,
             grease=grease,
+            grease_sigalgs=grease_sigalgs,
             ech=ech,
             padding=padding,
+            trust_anchors=None if trust_anchors is None else bytes(trust_anchors),
         )
         # Static, per-request browser headers paired with this TLS profile.
         # Kept as plain data on the Python wrapper - it is never seen by the
@@ -122,8 +126,10 @@ class Fingerprint:
             compress_certificate=data.get("compress_certificate"),
             record_size_limit=data.get("record_size_limit"),
             grease=bool(data.get("grease", True)),
+            grease_sigalgs=bool(data.get("grease_sigalgs", False)),
             ech=ech,
             padding=data.get("padding"),
+            trust_anchors=data.get("trust_anchors"),
             http_headers=data.get("http_headers"),
         )
 

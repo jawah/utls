@@ -4,12 +4,14 @@ from __future__ import annotations
 import pytest
 
 import utls
+from utls.profiles import chrome_152
 from utls.profiles._base import Ext, Group
 
 
 def test_all_presets_resolve():
     names = utls.presets()
     assert "chrome:131" in names
+    assert "chrome:152" in names
     assert "chrome:stable" in names
     # utls is Chrome-only by design.
     assert all(n.startswith("chrome:") for n in names), names
@@ -48,6 +50,20 @@ def test_ja3_and_ja4_hashes_are_stable_and_nonempty():
     assert fp.ja4_hash == j4
 
 
+def test_chrome_152_advertises_trust_anchors():
+    fp = utls.get_preset("chrome:152")
+    d = fp.to_dict()
+    assert int(Ext.trust_anchors) in d["extensions_order"]
+    assert d["trust_anchors"] == chrome_152.TRUST_ANCHOR_IDS
+    assert len(d["trust_anchors"]) == 0xB8
+    assert d["grease_sigalgs"] is True
+    assert utls.get_preset("chrome:150").to_dict()["grease_sigalgs"] is False
+    # 150 must not grow the new extension.
+    d150 = utls.get_preset("chrome:150").to_dict()
+    assert int(Ext.trust_anchors) not in d150["extensions_order"]
+    assert d150.get("trust_anchors") in (None, b"")
+
+
 def test_unknown_preset_raises():
     with pytest.raises(ValueError, match="unknown preset"):
         utls.get_preset("ie:6")
@@ -66,7 +82,8 @@ def test_ja4_pin_matches_rust():
         ("chrome:146", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
         ("chrome:148", "t13d1516h2_8daaf6152771_d8a2da3f94cd"),
         ("chrome:150", "t13d1516h2_8daaf6152771_806a8c22fdea"),
-        ("chrome:stable", "t13d1516h2_8daaf6152771_806a8c22fdea"),
+        ("chrome:152", "t13d1517h2_8daaf6152771_cb7bf5808d99"),
+        ("chrome:stable", "t13d1517h2_8daaf6152771_cb7bf5808d99"),
     ],
 )
 def test_ja4_matches_real_chrome_capture(name: str, expected_ja4: str) -> None:

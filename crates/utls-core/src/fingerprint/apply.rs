@@ -18,10 +18,12 @@
 //! * `alpn` - `SSL_set_alpn_protos`.
 //! * `alps` - `SSL_add_application_settings`.
 //! * `grease` - `SSL_CTX_set_grease_enabled`.
+//! * `grease_sigalgs` - `SSL_CTX_set_grease_sigalgs_enabled` (Chrome 152+).
 //! * `compress_certificate` - `SSL_CTX_add_cert_compression_alg`.
 //! * `extension order permutation` - `SSL_set_permute_extensions`
 //!   (matches Chrome 110+ random-per-handshake behaviour).
 //! * `status_request` / `signed_certificate_timestamp` - `SSL_enable_*`.
+//! * `trust_anchors` (`0xCA34`) - `SSL_set1_requested_trust_anchors`.
 //!
 //! ## What we deliberately do **not** do
 //!
@@ -35,7 +37,7 @@
 use std::ffi::CString;
 use std::os::raw::c_int;
 
-use super::spec::{EchPolicy, Fingerprint};
+use super::spec::{EchPolicy, Fingerprint, TRUST_ANCHORS_EXTENSION};
 use crate::error::{Error, Result};
 
 /// Apply `fp` to `ssl`.
@@ -75,6 +77,7 @@ pub unsafe fn apply(
         apply_record_size_limit(fp, ssl)?;
         apply_ech(fp, ssl)?;
         apply_padding(fp, ssl)?;
+        apply_trust_anchors(fp, ssl)?;
     }
     Ok(())
 }
@@ -384,7 +387,8 @@ unsafe fn apply_grease(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()
     // extensions (one prepended, one appended to the extension permutation
     // built by `ssl_setup_extension_permutation`) plus the GREASE entries
     // sprinkled into the cipher list, supported_groups, supported_versions,
-    // and key_share.
+    // and key_share. GREASE inside `signature_algorithms` is a *separate*
+    // knob (`SSL_CTX_set_grease_sigalgs_enabled`); Chrome 152+ turns it on.
     //
     // The toggle is per-CTX, not per-SSL. Because utls's fingerprint lives
     // on the context (one fingerprint per Context, applied to every SSL
@@ -399,6 +403,10 @@ unsafe fn apply_grease(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()
     }
     let enabled = if fp.grease { 1 } else { 0 };
     unsafe { boring_sys::SSL_CTX_set_grease_enabled(ctx, enabled) };
+    // Chrome 152+: prepend a per-connection GREASE value to signature_algorithms.
+    // Independent of `grease_enabled` until BoringSSL folds the two together.
+    let sigalgs_enabled = if fp.grease && fp.grease_sigalgs { 1 } else { 0 };
+    unsafe { boring_sys::SSL_CTX_set_grease_sigalgs_enabled(ctx, sigalgs_enabled) };
     Ok(())
 }
 
@@ -534,5 +542,27 @@ unsafe fn apply_padding(_fp: &Fingerprint, _ssl: *mut boring_sys::SSL) -> Result
     // *extension* is included automatically by BoringSSL when needed to
     // round the ClientHello up - explicit padding length control needs a
     // patch (tracked: `0005-clienthello-padding-target.patch`).
+    Ok(())
+}
+
+/// Emit the `trust_anchors` (0xCA34) extension.
+///
+/// Driven primarily by `fp.trust_anchors`. If that is `None` but
+/// `extensions_order` lists 0xCA34, we still send an empty list so the
+/// codepoint appears on the wire (JA4 counts it; an empty list is a
+/// valid "retry-flow only" advertisement).
+unsafe fn apply_trust_anchors(fp: &Fingerprint, ssl: *mut boring_sys::SSL) -> Result<()> {
+    let ids: &[u8] = match &fp.trust_anchors {
+        Some(v) => v.as_slice(),
+        None if fp.extensions_order.contains(&TRUST_ANCHORS_EXTENSION) => &[],
+        None => return Ok(()),
+    };
+    // SAFETY: `ssl` is a valid pre-handshake *mut SSL; BoringSSL copies
+    // `(ids, ids_len)` internally. An empty slice is documented to still
+    // emit the extension.
+    let rc = unsafe { boring_sys::SSL_set1_requested_trust_anchors(ssl, ids.as_ptr(), ids.len()) };
+    if rc != 1 {
+        return Err(Error::from_boring_queue("SSL_set1_requested_trust_anchors"));
+    }
     Ok(())
 }

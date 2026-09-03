@@ -1,0 +1,7 @@
+# cloudflare/boring still vendors BoringSSL e2a57cfb4, which predates
+# SSL_CTX_set_grease_sigalgs_enabled (Chrome 152 GREASE in signature_algorithms).
+# Point boring-sys at a newer upstream checkout and skip cloudflare's PQ
+# patch — current BoringSSL already has ML-KEM/ML-DSA natively.
+[env]
+BORING_BSSL_SOURCE_PATH = { value = "vendor/boringssl", relative = true }
+BORING_BSSL_ASSUME_PATCHED = "1"

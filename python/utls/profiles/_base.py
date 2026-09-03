@@ -30,6 +30,9 @@ class Ext(enum.IntEnum):
     application_settings = 17513  # 0x4469
     application_settings_new = 17613  # 0x44CD
     encrypted_client_hello = 65037
+    # draft-ietf-tls-trust-anchor-ids. Chrome 152+ sends this on every
+    # ClientHello. Not IANA-assigned; Chromium/BoringSSL use 0xCA34.
+    trust_anchors = 0xCA34
     # utls-private sentinel: see module docstring.
     GREASE = 0xFFFE
 

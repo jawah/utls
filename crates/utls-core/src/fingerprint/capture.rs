@@ -18,7 +18,9 @@
 //! All slicing is bounds-checked. Malformed input returns
 //! [`Error::Usage`] with a clear message; it never panics.
 
-use super::spec::{CertCompressAlg, EchPolicy, Fingerprint, GREASE_EXTENSION};
+use super::spec::{
+    CertCompressAlg, EchPolicy, Fingerprint, GREASE_EXTENSION, TRUST_ANCHORS_EXTENSION,
+};
 use crate::error::{Error, Result};
 
 const TLS_HANDSHAKE_RECORD: u8 = 0x16;
@@ -199,12 +201,30 @@ fn parse_extension(ext_type: u16, body: &[u8], fp: &mut Fingerprint) -> Result<(
         21 => {
             fp.padding = Some(body.len());
         }
+        // trust_anchors (0xCA34): TLS body is 2-byte length + 8-bit
+        // length-prefixed IDs. BoringSSL wants the inner ID list.
+        x if x == TRUST_ANCHORS_EXTENSION => {
+            fp.trust_anchors = Some(parse_trust_anchor_ids(body));
+        }
         _ => {
             // Unknown / not modeled - extension is preserved in
             // `extensions_order` so the shape is reproduced.
         }
     }
     Ok(())
+}
+
+/// Strip the TLS extension's outer 2-byte length prefix. A truncated or
+/// empty body becomes an empty ID list (still means "send the extension").
+fn parse_trust_anchor_ids(body: &[u8]) -> Vec<u8> {
+    if body.len() < 2 {
+        return Vec::new();
+    }
+    let declared = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let rest = &body[2..];
+    rest.get(..declared.min(rest.len()))
+        .unwrap_or(rest)
+        .to_vec()
 }
 
 #[inline]

@@ -55,8 +55,10 @@ class Fingerprint:
         compress_certificate: list[str] | None = ...,
         record_size_limit: int | None = ...,
         grease: bool = ...,
+        grease_sigalgs: bool = ...,
         ech: Any | None = ...,
         padding: int | None = ...,
+        trust_anchors: bytes | None = ...,
     ) -> None: ...
     def to_dict(self) -> dict[str, Any]: ...
     def ja3_string(self) -> str: ...
