@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2026.7.8"
+version = "2026.9.10"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -15,8 +15,8 @@ homepage = "https://github.com/jawah/utls"
 authors = ["Ahmed TAHRI"]
 
 [workspace.dependencies]
-# Pinned to a cloudflare/boring master commit for ML-DSA
-boring-sys = { git = "https://github.com/cloudflare/boring", rev = "931385ed41df448c82d150219f69af56e3c8399f" }
+# Pinned to cloudflare/boring PR #524 for Chrome 152 signature GREASE.
+boring-sys = { git = "https://github.com/cloudflare/boring", rev = "553d389cf309fdea5075e8fa2d2f731be67d96cc" }
 libc = "0.2"
 thiserror = "1"
 brotli = { version = "8", default-features = false, features = ["std"] }

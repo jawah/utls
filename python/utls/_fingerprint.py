@@ -26,6 +26,12 @@ class Fingerprint:
 
     All sequence arguments are accepted as any iterable; they are normalized
     to ``list`` and validated on construction.
+
+    ``trust_anchors`` is a sequence of non-empty, one-byte-length-prefixed IDs:
+    ``None`` omits the extension; ``b""`` sends an empty list. Setting
+    ``permute_trust_anchors=True`` shuffles IDs once per ``set_fingerprint``
+    installation, with the resulting order shared by that context's connections
+    and ECH forks. Captures preserve their observed order by default.
     """
 
     __slots__ = ("_handle", "_http_headers")
@@ -50,8 +56,11 @@ class Fingerprint:
         record_size_limit: int | None = None,
         compress_certificate: Iterable[str] | None = None,
         grease: bool = True,
+        grease_sigalgs: bool = False,
         ech: bool | bytes = False,
         padding: int | None = None,
+        trust_anchors: bytes | bytearray | None = None,
+        permute_trust_anchors: bool = False,
         http_headers: Mapping[str, str] | None = None,
     ) -> None:
         if ja3 is not None or ja4 is not None:
@@ -75,8 +84,11 @@ class Fingerprint:
             compress_certificate=list(compress_certificate or ()),
             record_size_limit=record_size_limit,
             grease=grease,
+            grease_sigalgs=grease_sigalgs,
             ech=ech,
             padding=padding,
+            trust_anchors=None if trust_anchors is None else bytes(trust_anchors),
+            permute_trust_anchors=permute_trust_anchors,
         )
         # Static, per-request browser headers paired with this TLS profile.
         # Kept as plain data on the Python wrapper - it is never seen by the
@@ -122,8 +134,11 @@ class Fingerprint:
             compress_certificate=data.get("compress_certificate"),
             record_size_limit=data.get("record_size_limit"),
             grease=bool(data.get("grease", True)),
+            grease_sigalgs=bool(data.get("grease_sigalgs", False)),
             ech=ech,
             padding=data.get("padding"),
+            trust_anchors=data.get("trust_anchors"),
+            permute_trust_anchors=bool(data.get("permute_trust_anchors", False)),
             http_headers=data.get("http_headers"),
         )
 

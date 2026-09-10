@@ -18,7 +18,7 @@
 //! `tests/test_handshake.py`).
 
 use utls_core::context::{Context, Protocol, TlsVersion, VerifyMode};
-use utls_core::fingerprint::spec::Fingerprint;
+use utls_core::fingerprint::spec::{Fingerprint, TRUST_ANCHORS_EXTENSION};
 
 /// Strips the GREASE bracketing codepoints from a ClientHello extension
 /// list so we can compare the "real" extension sequence across handshakes.
@@ -82,9 +82,8 @@ fn parse_ext_codepoints(record: &[u8]) -> Option<Vec<u16>> {
     Some(out)
 }
 
-/// Drives a fresh ClientHello and returns its (non-GREASE) extension
-/// codepoint sequence.
-fn capture_client_hello(fp: Fingerprint) -> Vec<u16> {
+/// Drive a handshake far enough to capture the ClientHello record.
+fn capture_raw_client_hello(fp: Fingerprint) -> Vec<u8> {
     let ctx = Context::new(Protocol::TlsClient).expect("Context::new");
     ctx.set_verify_mode(VerifyMode::None)
         .expect("set_verify_mode");
@@ -104,11 +103,74 @@ fn capture_client_hello(fp: Fingerprint) -> Vec<u16> {
     }
     let buf = outgoing.read(None).expect("read ClientHello");
     assert!(!buf.is_empty(), "no ClientHello was written");
-    parse_ext_codepoints(&buf)
+    buf
+}
+
+/// Drives a fresh ClientHello and returns its (non-GREASE) extension
+/// codepoint sequence.
+fn capture_client_hello(fp: Fingerprint) -> Vec<u16> {
+    parse_ext_codepoints(&capture_raw_client_hello(fp))
         .expect("ClientHello did not parse")
         .into_iter()
         .filter(|cp| !is_grease(*cp))
         .collect()
+}
+
+/// First signature_algorithms codepoint on the wire, if the extension is present.
+fn first_sigalg(record: &[u8]) -> Option<u16> {
+    let exts = parse_ext_block(record)?;
+    for (cp, body) in exts {
+        if cp != 0x000d || body.len() < 4 {
+            continue;
+        }
+        let list_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+        if list_len < 2 || body.len() < 2 + list_len {
+            return None;
+        }
+        return Some(u16::from_be_bytes([body[2], body[3]]));
+    }
+    None
+}
+
+fn parse_ext_block(record: &[u8]) -> Option<Vec<(u16, Vec<u8>)>> {
+    if record.len() < 5 || record[0] != 22 {
+        return None;
+    }
+    let frag_len = u16::from_be_bytes([record[3], record[4]]) as usize;
+    let frag = record.get(5..5 + frag_len)?;
+    if frag.len() < 4 || frag[0] != 1 {
+        return None;
+    }
+    let body_len = ((frag[1] as usize) << 16) | ((frag[2] as usize) << 8) | (frag[3] as usize);
+    let body = frag.get(4..4 + body_len)?;
+    let mut o = 2 + 32;
+    let sid_len = *body.get(o)? as usize;
+    o += 1 + sid_len;
+    let cs_len = u16::from_be_bytes([*body.get(o)?, *body.get(o + 1)?]) as usize;
+    o += 2 + cs_len;
+    let comp_len = *body.get(o)? as usize;
+    o += 1 + comp_len;
+    let ext_total = u16::from_be_bytes([*body.get(o)?, *body.get(o + 1)?]) as usize;
+    o += 2;
+    let end = o + ext_total;
+    if end > body.len() {
+        return None;
+    }
+    let mut out = Vec::new();
+    while o < end {
+        if o + 4 > end {
+            return None;
+        }
+        let cp = u16::from_be_bytes([body[o], body[o + 1]]);
+        let len = u16::from_be_bytes([body[o + 2], body[o + 3]]) as usize;
+        o += 4;
+        if o + len > end {
+            return None;
+        }
+        out.push((cp, body[o..o + len].to_vec()));
+        o += len;
+    }
+    Some(out)
 }
 
 fn make_fp(permute: bool) -> Fingerprint {
@@ -177,4 +239,38 @@ fn permute_enabled_changes_order_across_handshakes() {
             "permutation changed the extension *set*, not just order"
         );
     }
+}
+
+#[test]
+fn trust_anchors_extension_is_emitted_on_the_wire() {
+    let mut fp = make_fp(false);
+    fp.extensions_order.push(TRUST_ANCHORS_EXTENSION);
+    // Empty list is enough: BoringSSL still writes the codepoint.
+    fp.trust_anchors = Some(Vec::new());
+    let captured = capture_client_hello(fp);
+    assert!(
+        captured.contains(&TRUST_ANCHORS_EXTENSION),
+        "ClientHello missing trust_anchors (0xCA34): {captured:04x?}",
+    );
+}
+
+#[test]
+fn grease_sigalgs_prepends_grease_to_signature_algorithms() {
+    let mut off = make_fp(false);
+    off.grease = true;
+    off.grease_sigalgs = false;
+    let first_off = first_sigalg(&capture_raw_client_hello(off)).expect("sigalgs");
+    assert!(
+        !is_grease(first_off),
+        "sigalgs GREASE leaked out with grease_sigalgs=false: {first_off:04x}"
+    );
+
+    let mut on = make_fp(false);
+    on.grease = true;
+    on.grease_sigalgs = true;
+    let first_on = first_sigalg(&capture_raw_client_hello(on)).expect("sigalgs");
+    assert!(
+        is_grease(first_on),
+        "signature_algorithms did not start with GREASE: {first_on:04x}"
+    );
 }

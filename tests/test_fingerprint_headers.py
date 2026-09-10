@@ -3,11 +3,19 @@ from __future__ import annotations
 import pytest
 
 import utls
-from utls.profiles import chrome_131, chrome_142, chrome_146, chrome_148, chrome_150, chrome_stable
+from utls.profiles import (
+    chrome_131,
+    chrome_142,
+    chrome_146,
+    chrome_148,
+    chrome_150,
+    chrome_152,
+    chrome_stable,
+)
 
 
 
-@pytest.mark.parametrize("module", [chrome_131, chrome_142, chrome_146, chrome_148, chrome_150, chrome_stable])
+@pytest.mark.parametrize("module", [chrome_131, chrome_142, chrome_146, chrome_148, chrome_150, chrome_152, chrome_stable])
 def test_profile_exposes_http_headers(module):
     assert hasattr(module, "HTTP_HEADERS"), \
         f"{module.__name__} missing HTTP_HEADERS constant"
@@ -15,7 +23,7 @@ def test_profile_exposes_http_headers(module):
     assert module.HTTP_HEADERS, "HTTP_HEADERS must not be empty"
 
 
-@pytest.mark.parametrize("module", [chrome_131, chrome_142, chrome_146, chrome_148, chrome_150])
+@pytest.mark.parametrize("module", [chrome_131, chrome_142, chrome_146, chrome_148, chrome_150, chrome_152])
 def test_profile_headers_include_chrome_essentials(module):
     """The minimum set every Chrome-impersonation header bundle must carry."""
     h = module.HTTP_HEADERS
@@ -41,6 +49,7 @@ def test_profile_headers_include_chrome_essentials(module):
     (chrome_146, "146"),
     (chrome_148, "148"),
     (chrome_150, "150"),
+    (chrome_152, "152"),
 ])
 def test_profile_headers_version_tokens_match_profile(module, version_token):
     """User-Agent and sec-ch-ua must reflect the profile's Chrome major."""
@@ -52,7 +61,7 @@ def test_profile_headers_version_tokens_match_profile(module, version_token):
 def test_profile_headers_excluded_keys_absent():
     """The intentionally-excluded headers must not appear; they are request-
     or session-dependent and belong to the HTTP-layer caller."""
-    for h in (chrome_131.HTTP_HEADERS, chrome_142.HTTP_HEADERS, chrome_146.HTTP_HEADERS, chrome_148.HTTP_HEADERS, chrome_150.HTTP_HEADERS):
+    for h in (chrome_131.HTTP_HEADERS, chrome_142.HTTP_HEADERS, chrome_146.HTTP_HEADERS, chrome_148.HTTP_HEADERS, chrome_150.HTTP_HEADERS, chrome_152.HTTP_HEADERS):
         for forbidden in (
             "Cookie", "Referer", "Host",
             "Content-Length", "Content-Type",
@@ -88,7 +97,7 @@ def test_chrome_stable_aliases_current_chrome_headers():
     """``chrome:stable`` must alias the most recent shipping profile -
     bump this expectation in lockstep with ``chrome_stable.py`` when a new
     Chrome stable lands."""
-    assert chrome_stable.HTTP_HEADERS is chrome_150.HTTP_HEADERS
+    assert chrome_stable.HTTP_HEADERS is chrome_152.HTTP_HEADERS
 
 
 

@@ -18,15 +18,44 @@
 //! * `compress_certificate`  - `compress_certificate` algorithm names ("brotli", "zlib", "zstd").
 //! * `record_size_limit`     - value for `record_size_limit` if present.
 //! * `grease`                - whether to interleave GREASE values.
+//! * `grease_sigalgs`        - GREASE in `signature_algorithms` (Chrome 152+).
 //! * `ech`                   - `false`, `true` (offer GREASE ECH), or `bytes` (offer real ECH config).
 //! * `padding`               - fixed extension-padding target length, or None.
+//! * `trust_anchors`         - wire-format trust-anchor IDs for extension
+//!   `0xCA34` (Chrome 152+). `None` omits it.
 
 use std::collections::BTreeMap;
+
+use crate::error::{Error, Result};
+
+/// Validate the inner trust-anchor list (without its outer u16 length).
+pub(crate) fn validate_trust_anchor_ids(mut ids: &[u8]) -> Result<()> {
+    // The extension's u16 length also includes the list's u16 length.
+    if ids.len() > u16::MAX as usize - 2 {
+        return Err(Error::Usage(
+            "trust_anchors list exceeds TLS extension length".into(),
+        ));
+    }
+    while let Some((&len, rest)) = ids.split_first() {
+        if len == 0 || rest.len() < len as usize {
+            return Err(Error::Usage(
+                "trust_anchors contains an empty or truncated ID".into(),
+            ));
+        }
+        ids = &rest[len as usize..];
+    }
+    Ok(())
+}
 
 /// IANA codepoint reserved by this crate to mean "insert a GREASE-typed
 /// extension placeholder here". GREASE codepoints proper are 0x?A?A; we
 /// pick `0xFFFE` as a private-use sentinel that cannot collide.
 pub const GREASE_EXTENSION: u16 = 0xFFFE;
+
+/// `trust_anchors` extension (draft-ietf-tls-trust-anchor-ids). Chrome 152+
+/// sends this on every ClientHello. Not yet IANA-assigned; BoringSSL and
+/// Chromium use `0xCA34`.
+pub const TRUST_ANCHORS_EXTENSION: u16 = 0xCA34;
 
 /// A complete ClientHello specification.
 ///
@@ -56,8 +85,23 @@ pub struct Fingerprint {
     pub compress_certificate: Vec<CertCompressAlg>,
     pub record_size_limit: Option<u16>,
     pub grease: bool,
+    /// Chrome 152+ prepends a per-connection GREASE value to
+    /// `signature_algorithms`. This is a *separate* BoringSSL toggle
+    /// (`SSL_CTX_set_grease_sigalgs_enabled`); it is not implied by
+    /// `grease`. Only meaningful when `grease` is also true.
+    pub grease_sigalgs: bool,
     pub ech: EchPolicy,
     pub padding: Option<usize>,
+    /// Wire-format trust-anchor IDs for `trust_anchors` (`0xCA34`): a
+    /// concatenation of non-empty 8-bit length-prefixed IDs, *without* the
+    /// TLS extension's outer 2-byte length. `None` omits the extension.
+    /// `Some(v)` emits it even when `v` is empty (BoringSSL still sends
+    /// the extension; an empty list is the retry-flow signal).
+    pub trust_anchors: Option<Vec<u8>>,
+    /// Shuffle trust-anchor IDs once when installed on a Context. The order
+    /// remains stable for its connections and ECH forks. Captures default to
+    /// false so replay preserves the captured order.
+    pub permute_trust_anchors: bool,
 }
 
 /// Certificate-compression algorithm IDs we know how to assert in the
@@ -118,13 +162,58 @@ impl Default for Fingerprint {
             compress_certificate: Vec::new(),
             record_size_limit: None,
             grease: true,
+            grease_sigalgs: false,
             ech: EchPolicy::Off,
             padding: None,
+            trust_anchors: None,
+            permute_trust_anchors: false,
         }
     }
 }
 
 impl Fingerprint {
+    pub(crate) fn prepare_for_context(&mut self) -> Result<()> {
+        self.validate()?;
+        if !self.permute_trust_anchors {
+            return Ok(());
+        }
+        if let Some(ids) = &mut self.trust_anchors {
+            let mut entries = Vec::new();
+            let mut rest = ids.as_slice();
+            while !rest.is_empty() {
+                let len = rest[0] as usize + 1;
+                entries.push(&rest[..len]);
+                rest = &rest[len..];
+            }
+            for i in (1..entries.len()).rev() {
+                let bound = (i + 1) as u32;
+                let threshold = bound.wrapping_neg() % bound;
+                let j = loop {
+                    let mut bytes = [0u8; 4];
+                    // SAFETY: bytes is a writable buffer of the given size.
+                    if unsafe { boring_sys::RAND_bytes(bytes.as_mut_ptr(), bytes.len()) } != 1 {
+                        return Err(Error::from_boring_queue("RAND_bytes"));
+                    }
+                    let value = u32::from_ne_bytes(bytes);
+                    if value >= threshold {
+                        break (value % bound) as usize;
+                    }
+                };
+                entries.swap(i, j);
+            }
+            *ids = entries.concat();
+        }
+        Ok(())
+    }
+
+    /// Validate modeled payloads before storing or applying the fingerprint.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(ids) = &self.trust_anchors {
+            validate_trust_anchor_ids(ids)?;
+        }
+        Ok(())
+    }
+
     /// Construct via the builder.
     pub fn builder() -> FingerprintBuilder {
         FingerprintBuilder::default()
@@ -135,7 +224,8 @@ impl Fingerprint {
     ///
     /// # Safety
     ///
-    /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake.
+    /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake, with an
+    /// SSL_CTX exclusive to this connection (GREASE/compression mutate it).
     pub unsafe fn apply_to_ssl(&self, ssl: *mut boring_sys::SSL) -> crate::error::Result<()> {
         // SAFETY: contract delegated to caller.
         unsafe { super::apply::apply(self, ssl, None) }
@@ -152,7 +242,8 @@ impl Fingerprint {
     ///
     /// # Safety
     ///
-    /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake.
+    /// `ssl` must be a non-null, live `*mut SSL` not yet in handshake, with an
+    /// SSL_CTX exclusive to this connection (GREASE/compression mutate it).
     pub unsafe fn apply_to_ssl_with_alpn_override(
         &self,
         ssl: *mut boring_sys::SSL,
@@ -192,6 +283,7 @@ impl Fingerprint {
         );
         m.insert("record_size_limit", OptU16(self.record_size_limit));
         m.insert("grease", Bool(self.grease));
+        m.insert("grease_sigalgs", Bool(self.grease_sigalgs));
         m.insert("permute_extensions", Bool(self.permute_extensions));
         m.insert(
             "ech",
@@ -202,6 +294,8 @@ impl Fingerprint {
             },
         );
         m.insert("padding", OptUsize(self.padding));
+        m.insert("trust_anchors", OptBytes(self.trust_anchors.clone()));
+        m.insert("permute_trust_anchors", Bool(self.permute_trust_anchors));
         m
     }
 }
@@ -216,6 +310,7 @@ pub enum FpValue {
     Bool(bool),
     Str(String),
     Bytes(Vec<u8>),
+    OptBytes(Option<Vec<u8>>),
 }
 
 /// Builder. Every field is independently optional, matching the Python
@@ -272,6 +367,10 @@ impl FingerprintBuilder {
         self.0.grease = v;
         self
     }
+    pub fn grease_sigalgs(mut self, v: bool) -> Self {
+        self.0.grease_sigalgs = v;
+        self
+    }
     pub fn ech(mut self, v: EchPolicy) -> Self {
         self.0.ech = v;
         self
@@ -280,7 +379,25 @@ impl FingerprintBuilder {
         self.0.padding = v;
         self
     }
-    pub fn build(self) -> Fingerprint {
+    pub fn trust_anchors(mut self, v: Option<Vec<u8>>) -> Self {
+        self.0.trust_anchors = v;
+        self
+    }
+    pub fn permute_trust_anchors(mut self, v: bool) -> Self {
+        self.0.permute_trust_anchors = v;
+        self
+    }
+    pub fn build(mut self) -> Fingerprint {
+        // trust_anchors is authoritative for both the wire and hash metadata.
+        // None omits it, Some(empty) sends an empty list. Preserve its supplied
+        // position when present, adding the codepoint if it was omitted.
+        if self.0.trust_anchors.is_none() {
+            self.0
+                .extensions_order
+                .retain(|&cp| cp != TRUST_ANCHORS_EXTENSION);
+        } else if !self.0.extensions_order.contains(&TRUST_ANCHORS_EXTENSION) {
+            self.0.extensions_order.push(TRUST_ANCHORS_EXTENSION);
+        }
         self.0
     }
 }

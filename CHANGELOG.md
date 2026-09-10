@@ -1,6 +1,16 @@
 Release History
 ===============
 
+2026.9.10
+--------
+
+- Added `chrome:152` profile with trust-anchor IDs and signature-algorithm GREASE; moved `chrome:stable` to it.
+- Added `trust_anchors` and `permute_trust_anchors` fingerprint options; trust-anchor order is chosen once per context configuration.
+- Updated `boring-sys` to support Chrome 152 signature GREASE.
+- Fixed GREASE and certificate-compression settings leaking across pending connections and ECH forks.
+- Fixed capture/replay losing signature GREASE and the ALPS codepoint.
+- Fixed trust-anchor validation; `None` omits the extension and `b""` sends an empty list.
+
 2026.7.8
 --------
 

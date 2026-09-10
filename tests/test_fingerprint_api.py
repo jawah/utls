@@ -37,6 +37,16 @@ def test_from_dict_round_trips_ech_off():
     assert Fingerprint.from_dict(d).to_dict()["ech"] == "off"
 
 
+def test_from_dict_round_trips_trust_anchors():
+    blob = bytes.fromhex("01aa04d679090b")
+    d = Fingerprint.from_preset("chrome:152").to_dict()
+    d["trust_anchors"] = blob
+    fp = Fingerprint.from_dict(d)
+    assert fp.to_dict()["trust_anchors"] == blob
+    d["trust_anchors"] = None
+    assert Fingerprint.from_dict(d).to_dict()["trust_anchors"] is None
+
+
 def test_repr_summarises_shape():
     fp = Fingerprint.from_preset("chrome:131")
     r = repr(fp)

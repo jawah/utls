@@ -429,11 +429,14 @@ impl Context {
     /// Server-side contexts cannot have a fingerprint: fingerprinting
     /// rewrites the ClientHello, which a server never sends. Calling this
     /// on a server context returns `Err(Error::Usage(...))`.
-    pub fn set_fingerprint(&self, fp: Option<Fingerprint>) -> Result<()> {
+    pub fn set_fingerprint(&self, mut fp: Option<Fingerprint>) -> Result<()> {
         if self.is_server && fp.is_some() {
             return Err(Error::Usage(
                 "set_fingerprint() is client-only (servers do not send a ClientHello)".into(),
             ));
+        }
+        if let Some(fp) = &mut fp {
+            fp.prepare_for_context()?;
         }
         *self.fingerprint.lock().unwrap() = fp;
         Ok(())
@@ -649,6 +652,77 @@ impl Context {
     /// Return the currently-installed ECH `ECHConfigList`, if any.
     pub fn ech_config_list(&self) -> Option<Vec<u8>> {
         self.ech_config_list.lock().unwrap().clone()
+    }
+
+    /// A private native context for a fingerprinted connection. SSL_new on
+    /// the original context first inherits its per-SSL configuration; the
+    /// subsequent SSL_set_SSL_CTX swaps the certificate-related and other
+    /// settings BoringSSL still reads from the context during a handshake.
+    /// In particular, GREASE and certificate compression must never mutate
+    /// a context used by another connection (including an ECH fork).
+    fn fingerprint_context(&self) -> Result<Self> {
+        let private = Self::new(Protocol::TlsClient)?;
+        let src = self.ctx.as_ptr();
+        let dst = private.ctx.as_ptr();
+        // SAFETY: both contexts are live. The setters retain their own
+        // references to the certificates/key; set_cert_store takes ownership
+        // of the additional reference. No CA or private-key serialization.
+        unsafe {
+            let store = boring_sys::SSL_CTX_get_cert_store(src);
+            if store.is_null() || boring_sys::X509_STORE_up_ref(store) != 1 {
+                return Err(Error::from_boring_queue("X509_STORE_up_ref"));
+            }
+            boring_sys::SSL_CTX_set_cert_store(dst, store);
+            if boring_sys::X509_VERIFY_PARAM_set1(
+                boring_sys::SSL_CTX_get0_param(dst),
+                boring_sys::SSL_CTX_get0_param(src),
+            ) != 1
+            {
+                return Err(Error::from_boring_queue("X509_VERIFY_PARAM_set1"));
+            }
+            let cert = boring_sys::SSL_CTX_get0_certificate(src);
+            if !cert.is_null() && boring_sys::SSL_CTX_use_certificate(dst, cert) != 1 {
+                return Err(Error::from_boring_queue("SSL_CTX_use_certificate"));
+            }
+            let key = boring_sys::SSL_CTX_get0_privatekey(src);
+            if !key.is_null() && boring_sys::SSL_CTX_use_PrivateKey(dst, key) != 1 {
+                return Err(Error::from_boring_queue("SSL_CTX_use_PrivateKey"));
+            }
+            let mut chain = std::ptr::null_mut();
+            if boring_sys::SSL_CTX_get0_chain_certs(src, &mut chain) != 1
+                || (!chain.is_null() && boring_sys::SSL_CTX_set1_chain(dst, chain) != 1)
+            {
+                return Err(Error::from_boring_queue("SSL_CTX_set1_chain"));
+            }
+
+            // SSL_new leaves the TLS <= 1.2 cipher list on SSL_CTX until a
+            // per-SSL override is supplied. Preserve its order even for a
+            // custom fingerprint whose cipher_suites list is empty.
+            let ciphers = boring_sys::SSL_CTX_get_ciphers(src);
+            let mut names = Vec::new();
+            for i in 0..boring_sys::OPENSSL_sk_num(ciphers as *const _) {
+                let cipher = boring_sys::OPENSSL_sk_value(ciphers as *const _, i)
+                    as *const boring_sys::SSL_CIPHER;
+                names.push(
+                    std::ffi::CStr::from_ptr(boring_sys::SSL_CIPHER_get_name(cipher))
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            if !names.is_empty() {
+                private.set_ciphers(&names.join(":"))?;
+            }
+        }
+        // A connection keeps `private` alive, and therefore also its keylog
+        // registry entry. This snapshots the writer without reopening a file.
+        if let Some(writer) = keylog_registry_lookup(src) {
+            keylog_registry_set(dst, writer);
+            // SAFETY: dst is live, and the callback looks up its own context.
+            unsafe {
+                boring_sys::SSL_CTX_set_keylog_callback(dst, Some(keylog_cb_trampoline));
+            }
+        }
+        Ok(private)
     }
 
     /// `load_verify_locations(cafile=..., capath=...)`.
@@ -981,6 +1055,28 @@ impl Context {
         // SAFETY: ctx is valid; SSL_new either returns NULL or a fresh handle.
         let raw = unsafe { boring_sys::SSL_new(self.ctx.as_ptr()) };
         let ssl = NonNull::new(raw).ok_or_else(|| Error::from_boring_queue("SSL_new"))?;
+        // Own the SSL immediately, including on errors below. Keep callback
+        // registries alive for as long as BoringSSL retains the native context.
+        let mut connection = Connection {
+            ssl,
+            state: HandshakeState::NotStarted,
+            server_hostname: server_hostname.map(str::to_owned),
+            is_server: self.is_server,
+            _registry_guard: Arc::clone(&self._registry_guard),
+            _fingerprint_context: None,
+        };
+        let fingerprint = self.fingerprint();
+        if fingerprint.is_some() {
+            let private = self.fingerprint_context()?;
+            // SAFETY: SSL is fresh. BoringSSL retains dst and copies its
+            // certificate configuration; all other per-SSL settings inherited
+            // by SSL_new remain intact. The initial session context is retained.
+            if unsafe { boring_sys::SSL_set_SSL_CTX(ssl.as_ptr(), private.ctx.as_ptr()) }.is_null()
+            {
+                return Err(Error::from_boring_queue("SSL_set_SSL_CTX"));
+            }
+            connection._fingerprint_context = Some(private);
+        }
 
         // Wire the BIOs. SSL_set_bio takes ownership of *both* BIOs (refcount-wise);
         // because we want Python to keep its MemoryBIO objects alive and
@@ -1013,12 +1109,8 @@ impl Context {
                 }
             }
 
-            return Ok(Connection {
-                ssl,
-                state: HandshakeState::NotStarted,
-                server_hostname: None,
-                is_server: true,
-            });
+            connection.server_hostname = None;
+            return Ok(connection);
         }
 
         // Client mode.
@@ -1092,7 +1184,7 @@ impl Context {
         }
 
         // Fingerprint, if any.
-        if let Some(fp) = self.fingerprint() {
+        if let Some(fp) = fingerprint {
             // If the user explicitly called set_alpn_protocols(...) after
             // set_fingerprint(...), pass that list as an override: the
             // fingerprint stays Chrome in every other respect, but ALPN
@@ -1132,12 +1224,7 @@ impl Context {
             }
         }
 
-        Ok(Connection {
-            ssl,
-            state: HandshakeState::NotStarted,
-            server_hostname: server_hostname.map(|s| s.to_owned()),
-            is_server: false,
-        })
+        Ok(connection)
     }
 }
 
@@ -1166,6 +1253,8 @@ pub struct Connection {
     state: HandshakeState,
     server_hostname: Option<String>,
     is_server: bool,
+    _registry_guard: Arc<RegistryGuard>,
+    _fingerprint_context: Option<Context>,
 }
 
 // SAFETY: see `Context` - `SSL*` is `Send` provided we never touch it
