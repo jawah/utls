@@ -585,6 +585,10 @@ impl PyConnection {
             .map_err(map_err)
     }
 
+    fn pending(&self, py: Python<'_>) -> usize {
+        py.detach(|| self.inner.lock().unwrap().pending())
+    }
+
     fn read<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyBytes>> {
         let bytes = py
             .detach(|| self.inner.lock().unwrap().read(n))

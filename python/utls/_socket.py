@@ -278,6 +278,12 @@ class SSLSocket:
         if self._closed:
             self._real_close()
 
+    def pending(self) -> int:
+        """Return buffered, decrypted bytes available to read, without I/O."""
+        if self.fileno() == -1:
+            return 0
+        return self._sslobj.pending()
+
     def selected_alpn_protocol(self) -> str | None:
         return self._sslobj.selected_alpn_protocol()
 

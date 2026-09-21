@@ -440,6 +440,28 @@ class TestSocketProperties:
         ssock, ctx = connected
         assert ssock.context is ctx
 
+    def test_pending_after_partial_read(self, connected):
+        ssock, _ = connected
+        ssock.settimeout(5)
+        assert ssock.pending() == 0
+        ssock.sendall(b"abcdef")
+        assert ssock.recv(1) == b"a"
+        assert ssock.pending() == 5
+        assert ssock.pending() == 5
+        assert ssock.recv(2) == b"bc"
+        assert ssock.pending() == 3
+        assert ssock.recv(3) == b"def"
+        assert ssock.pending() == 0
+
+    def test_pending_after_close(self, connected):
+        ssock, _ = connected
+        ssock.settimeout(5)
+        ssock.sendall(b"abcdef")
+        assert ssock.recv(1) == b"a"
+        assert ssock.pending() == 5
+        ssock.close()
+        assert ssock.pending() == 0
+
     def test_server_hostname(self, connected):
         ssock, _ = connected
         assert ssock.server_hostname == "localhost"

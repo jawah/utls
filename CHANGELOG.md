@@ -1,6 +1,11 @@
 Release History
 ===============
 
+2026.9.21
+--------
+
+- Fixed `pending()` method from SSLSocket. It is now aligned with stdlib ssl expected behavior.
+
 2026.9.10
 --------
 

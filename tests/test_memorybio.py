@@ -58,6 +58,19 @@ def test_sslobject_pending_starts_at_zero(fresh_client_obj):
     assert obj.pending() == 0
 
 
+@pytest.mark.parametrize("bio_class", [utls.MemoryBIO, _stdlib_ssl.MemoryBIO])
+def test_sslobject_pending_ignores_handshake_ciphertext(bio_class):
+    ctx = SSLContext(utls.PROTOCOL_TLS_CLIENT)
+    incoming, outgoing = bio_class(), bio_class()
+    obj = ctx.wrap_bio(incoming, outgoing, server_hostname="localhost")
+    with pytest.raises(SSLWantReadError):
+        obj.do_handshake()
+    queued = outgoing.pending
+    assert queued > 0
+    assert obj.pending() == 0
+    assert outgoing.pending == queued
+
+
 def test_sslobject_context_getter_returns_owner(fresh_client_obj):
     ctx, obj = fresh_client_obj
     assert obj.context is ctx
@@ -133,17 +146,50 @@ def _drive(client, server, c_in, c_out, s_in, s_out):
             c_in.write(d)
 
 
-def _connected_pair(ca, cert):
+def _connected_pair(ca, cert, bio_class=utls.MemoryBIO):
     sctx = utls.SSLContext(utls.PROTOCOL_TLS_SERVER)
     cert.configure_cert(sctx)
     cctx = utls.create_default_context()
     ca.configure_trust(cctx)
-    c_in, c_out = utls.MemoryBIO(), utls.MemoryBIO()
-    s_in, s_out = utls.MemoryBIO(), utls.MemoryBIO()
+    c_in, c_out = bio_class(), bio_class()
+    s_in, s_out = bio_class(), bio_class()
     cobj = cctx.wrap_bio(c_in, c_out, server_hostname="localhost")
     sobj = sctx.wrap_bio(s_in, s_out, server_side=True)
     _drive(cobj, sobj, c_in, c_out, s_in, s_out)
     return cobj, sobj, c_in, c_out, s_in, s_out
+
+
+@pytest.mark.parametrize("bio_class", [utls.MemoryBIO, _stdlib_ssl.MemoryBIO])
+@pytest.mark.parametrize("server_side", [False, True])
+def test_sslobject_pending_counts_only_buffered_plaintext(ca, bio_class, server_side):
+    cert = ca.issue_cert("localhost")
+    client, server, c_in, c_out, s_in, s_out = _connected_pair(ca, cert, bio_class)
+    if server_side:
+        reader, writer = server, client
+        incoming, outgoing, peer_outgoing = s_in, s_out, c_out
+    else:
+        reader, writer = client, server
+        incoming, outgoing, peer_outgoing = c_in, c_out, s_out
+
+    writer.write(b"abcdef")
+    incoming.write(peer_outgoing.read())
+    queued = incoming.pending
+    assert queued > 0
+    # pending() must not process ciphertext, even when a complete record is queued.
+    assert reader.pending() == 0
+    assert incoming.pending == queued
+
+    assert reader.read(1) == b"a"
+    assert reader.pending() == 5
+    assert reader.pending() == 5  # Inspecting pending data must not consume it.
+    reader.write(b"outbound")
+    assert outgoing.pending > 0
+    assert reader.pending() == 5
+    assert reader.read(2) == b"bc"
+    assert reader.pending() == 3
+    assert reader.read(3) == b"def"
+    assert reader.pending() == 0
+    assert outgoing.pending > 0
 
 
 def test_sslobject_read_into_bytearray(ca):

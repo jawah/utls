@@ -1310,6 +1310,13 @@ impl Connection {
         }
     }
 
+    /// Buffered, decrypted application bytes available to read, without I/O.
+    pub fn pending(&self) -> usize {
+        // SAFETY: ssl is live; SSL_pending only inspects its buffered plaintext
+        // and returns a non-negative byte count.
+        unsafe { boring_sys::SSL_pending(self.ssl.as_ptr()) as usize }
+    }
+
     /// Read up to `max` bytes of decrypted application data.
     ///
     /// Calls `SSL_read` in a loop until either `max` bytes are accumulated,

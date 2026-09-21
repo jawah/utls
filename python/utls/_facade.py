@@ -362,11 +362,8 @@ class SSLObject:
             self._pump_out()
 
     def pending(self) -> int:
-        # Stdlib pending() reports decrypted bytes available; BoringSSL has
-        # SSL_pending() but our PyO3 binding doesn't expose it yet. We return
-        # the outgoing ciphertext pending count, which is the more useful
-        # number for a MemoryBIO-driven loop.
-        return self._outgoing.pending
+        """Return buffered, decrypted bytes available to read, without I/O."""
+        return self._conn.pending()
 
     def selected_alpn_protocol(self) -> str | None:
         return self._conn.selected_alpn()
