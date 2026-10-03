@@ -115,17 +115,13 @@ def test_sslobject_sslobj_property_self_aliases(fresh_client_obj):
 
 # Adapted-BIO regime: stdlib ssl.MemoryBIO -> rust BIO pump
 
-def test_adapted_bio_pumps_eof_into_rust_incoming():
-    # Stdlib MemoryBIO triggers the "adapted" regime (separate rust BIOs
-    # plus _pumping=True). do_handshake -> _pump_in -> sees inc.eof ->
-    # rust_incoming.write_eof(). The handshake itself cannot proceed
-    # without peer bytes, but the pump runs.
+@pytest.mark.parametrize("bio_class", [utls.MemoryBIO, _stdlib_ssl.MemoryBIO])
+def test_handshake_rejects_transport_eof(bio_class):
     ctx = utls.create_default_context()
-    inc = _stdlib_ssl.MemoryBIO()
-    out = _stdlib_ssl.MemoryBIO()
+    inc, out = bio_class(), bio_class()
     obj = ctx.wrap_bio(inc, out, server_hostname="example.com")
     inc.write_eof()
-    with pytest.raises((SSLError, SSLWantReadError, SSLEOFError)):
+    with pytest.raises(SSLEOFError):
         obj.do_handshake()
 
 
@@ -136,7 +132,7 @@ def _drive(client, server, c_in, c_out, s_in, s_out):
         for side in (client, server):
             try:
                 side.do_handshake()
-            except (utls.SSLWantReadError, utls.SSLWantWriteError):
+            except (_stdlib_ssl.SSLWantReadError, _stdlib_ssl.SSLWantWriteError):
                 pass
         d = c_out.read()
         if d:
@@ -224,3 +220,77 @@ def test_sslobject_read_rejects_readonly_buffer(ca):
     sobj.write(b"x")
     with pytest.raises(TypeError):
         cobj.read(1, b"immutable")  # bytes are read-only
+
+
+@pytest.mark.parametrize("tls_version", [_stdlib_ssl.TLSVersion.TLSv1_2, _stdlib_ssl.TLSVersion.TLSv1_3])
+@pytest.mark.parametrize("bio_class", [utls.MemoryBIO, _stdlib_ssl.MemoryBIO])
+@pytest.mark.parametrize("buffered", [False, True])
+@pytest.mark.parametrize("payload", [b"", b"abcdef"])
+@pytest.mark.parametrize("shutdown", ["clean", "clean-and-eof", "unclean", "truncated"])
+def test_sslobject_read_eof(ca, tls_version, bio_class, buffered, payload, shutdown):
+    sctx = _stdlib_ssl.SSLContext(_stdlib_ssl.PROTOCOL_TLS_SERVER)
+    ca.issue_cert("localhost").configure_cert(sctx)
+    sctx.minimum_version = sctx.maximum_version = tls_version
+    cctx = utls.create_default_context()
+    ca.configure_trust(cctx)
+    c_in, c_out = bio_class(), bio_class()
+    s_in, s_out = _stdlib_ssl.MemoryBIO(), _stdlib_ssl.MemoryBIO()
+    client = cctx.wrap_bio(c_in, c_out, server_hostname="localhost")
+    server = sctx.wrap_bio(s_in, s_out, server_side=True)
+    _drive(client, server, c_in, c_out, s_in, s_out)
+    assert client.version() == tls_version.name.replace("_", ".")
+
+    buffer = bytearray(4) if buffered else None
+    with pytest.raises(SSLWantReadError):
+        client.read(4, buffer)
+    if payload:
+        assert server.write(payload) == len(payload)
+    clean = shutdown in ("clean", "clean-and-eof")
+    if clean:
+        with pytest.raises(_stdlib_ssl.SSLWantReadError):
+            server.unwrap()
+        assert s_out.pending > 0
+    c_in.write(s_out.read())
+    if shutdown == "truncated":
+        server.write(b"incomplete record")
+        c_in.write(s_out.read()[:-1])
+    if shutdown != "clean":
+        c_in.write_eof()
+
+    # Return all complete application data before reporting either kind of EOF.
+    received = bytearray()
+    while len(received) < len(payload):
+        result = client.read(4, buffer)
+        assert result  # EOF before all application data would truncate it.
+        received.extend(buffer[:result] if buffered else result)
+    assert received == payload
+    for _ in range(2):
+        if buffered:
+            buffer[:] = b"xxxx"
+        if clean:
+            assert client.read(4, buffer) == (0 if buffered else b"")
+        else:
+            with pytest.raises(SSLEOFError):
+                client.read(4, buffer)
+        if buffered:
+            assert buffer == b"xxxx"
+
+
+@pytest.mark.parametrize("buffered", [False, True])
+@pytest.mark.parametrize("kind, error_type", [
+    ("WantRead", SSLWantReadError),
+    ("WantWrite", utls.SSLWantWriteError),
+    ("Eof", SSLEOFError),
+    ("Protocol", SSLError),
+])
+def test_sslobject_read_preserves_errors(fresh_client_obj, monkeypatch, buffered, kind, error_type):
+    from utls import _utls
+
+    class FailingConnection:
+        def read(self, n):
+            raise _utls.CoreError(kind, "read failed")
+
+    _, obj = fresh_client_obj
+    monkeypatch.setattr(obj, "_conn", FailingConnection())
+    with pytest.raises(error_type, match="read failed"):
+        obj.read(4, bytearray(4) if buffered else None)

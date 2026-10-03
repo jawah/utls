@@ -329,6 +329,8 @@ class SSLObject:
                     # even when the caller passed a multi-dim memoryview.
                     mv.cast("B")[:ln] = data
                 return ln
+        except SSLZeroReturnError:
+            return b"" if buffer is None else 0
         finally:
             self._pump_out()
 

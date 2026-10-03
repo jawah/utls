@@ -59,10 +59,8 @@ impl MemoryBio {
         };
         let bio = NonNull::new(raw).ok_or_else(|| Error::from_boring_queue("BIO_new"))?;
 
-        // Mark the BIO as accepting writes after EOF so that `pending` keeps
-        // working as expected even after `write_eof()`.
-        // BIO_set_mem_eof_return(bio, -1) -> reads after EOF return WANT_READ
-        // (instead of returning 0 which BoringSSL would treat as success).
+        // An empty BIO requests more input until write_eof() marks the
+        // transport closed. A negative return sets the BIO's retry flag.
         // SAFETY: `bio` is a valid memory BIO we just allocated.
         unsafe {
             boring_sys::BIO_set_mem_eof_return(bio.as_ptr(), -1);
@@ -141,6 +139,11 @@ impl MemoryBio {
     /// buffered bytes are exhausted.
     pub fn write_eof(&mut self) {
         self.eof = true;
+        // Report transport EOF, rather than retry, after buffered bytes drain.
+        // SAFETY: bio is a live memory BIO; this preserves its buffered data.
+        unsafe {
+            boring_sys::BIO_set_mem_eof_return(self.bio.as_ptr(), 0);
+        }
     }
 }
 
@@ -191,5 +194,15 @@ mod tests {
         assert!(!bio.eof()); // still bytes pending
         bio.read(None).unwrap();
         assert!(bio.eof());
+        // BoringSSL reads the raw BIO, so it must observe EOF as well.
+        let mut byte = 0u8;
+        // SAFETY: bio is live and byte provides one writable byte.
+        unsafe {
+            assert_eq!(
+                boring_sys::BIO_read(bio.as_ptr(), &mut byte as *mut u8 as *mut _, 1),
+                0
+            );
+            assert_eq!(boring_sys::BIO_should_retry(bio.as_ptr()), 0);
+        }
     }
 }

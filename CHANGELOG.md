@@ -1,6 +1,12 @@
 Release History
 ===============
 
+2026.10.3
+---------
+
+- Fixed EOF handling with MemoryBIO to align ourselves with stdlib behavior.
+- Update boringssl to 2026.09.03
+
 2026.9.21
 --------
 

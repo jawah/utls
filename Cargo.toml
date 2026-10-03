@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2026.9.21"
+version = "2026.10.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -16,7 +16,7 @@ authors = ["Ahmed TAHRI"]
 
 [workspace.dependencies]
 # Pinned to cloudflare/boring PR #524 for Chrome 152 signature GREASE.
-boring-sys = { git = "https://github.com/cloudflare/boring", rev = "553d389cf309fdea5075e8fa2d2f731be67d96cc" }
+boring-sys = { git = "https://github.com/cloudflare/boring", rev = "45512aac61eba490da88133d545a05419cc62d91" }
 libc = "0.2"
 thiserror = "1"
 brotli = { version = "8", default-features = false, features = ["std"] }
